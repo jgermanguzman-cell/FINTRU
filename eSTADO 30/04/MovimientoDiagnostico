@@ -1,0 +1,324 @@
+function onOpen(e) {
+  SpreadsheetApp.getUi()
+    .createMenu("Fintru")
+
+    .addItem("Reparar etiquetas relacionales", "repararEtiquetasRelacionales")
+    .addItem("Refrescar selectores diagnóstico", "refrescarSelectoresDiagnostico")
+
+    .addSeparator()
+    .addItem("Actualizar presupuesto desde metas", "setupMetas_M10_PresupuestoDesdeMetas")
+    .addItem("Actualizar cuotas de deudas", "actualizarCuotasDeudasEnPresupuesto")
+    .addItem("Actualizar pagos mínimos de tarjetas", "actualizarPagosMinimosTarjetas")
+    .addItem("Aplicar plan al presupuesto", "aplicarPlanFintru")
+
+    .addSeparator()
+    .addItem("Refrescar recordatorios", "refrescarMetas_M11_Recordatorios")
+    .addItem("Actualizar dashboard de metas", "actualizarDashboardMetasFintru")
+    .addItem("Actualizar dashboard de recordatorios", "actualizarDashboardRecordatoriosFintru")
+
+    .addSeparator()
+    .addItem("Crear trigger diario recordatorios", "crearTriggerDiarioRecordatoriosChecklist")
+    .addItem("Crear trigger checklist recordatorios", "crearTriggerRecordatoriosChecklist")
+
+    .addToUi();
+}
+
+function refrescarSelectoresDiagnostico() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  const diagnostico = ss.getSheetByName("Diagnóstico");
+
+  if (!diagnostico) {
+    ui.alert("No encontré la hoja Diagnóstico.");
+    return;
+  }
+
+  const tabla = obtenerUbicacionTablaPlanDiagnostico_(diagnostico);
+
+  if (!tabla) {
+    ui.alert("No encontré la tabla del plan en Diagnóstico. Debe tener los encabezados Campo | Valor.");
+    return;
+  }
+
+  const metodoPago = buscarCampoEnTablaPlan_(diagnostico, tabla, "Método de Pago");
+  const destino = buscarCampoEnTablaPlan_(diagnostico, tabla, "Destino");
+
+  if (!metodoPago || !destino) {
+    ui.alert("No encontré uno o más campos: Método de Pago o Destino.");
+    return;
+  }
+
+  aplicarSelectorDiagnostico_(diagnostico, metodoPago.row, metodoPago.valueCol, "'Métodos de Pago'!J2:J");
+  aplicarSelectorDiagnostico_(diagnostico, destino.row, destino.valueCol, "'Métodos de Pago'!L2:L");
+
+  ui.alert("Selectores de Diagnóstico actualizados correctamente.");
+}
+
+function aplicarPlanFintru() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+
+  const diagnostico = ss.getSheetByName("Diagnóstico");
+  const presupuesto = ss.getSheetByName("Presupuesto");
+
+  if (!diagnostico) {
+    ui.alert("No encontré la hoja Diagnóstico.");
+    return;
+  }
+
+  if (!presupuesto) {
+    ui.alert("No encontré la hoja Presupuesto.");
+    return;
+  }
+
+  const datosPlan = leerTablaPlanDiagnostico_(diagnostico);
+
+  if (!datosPlan) {
+    ui.alert("No encontré la tabla del plan en Diagnóstico.");
+    return;
+  }
+
+  const monto = Number(datosPlan["Monto"]);
+  const cop = Number(datosPlan["COP"]);
+
+  if (!monto || monto <= 0 || !cop || cop <= 0) {
+    ui.alert("No hay un movimiento de patrimonio sugerido para aplicar. El valor debe ser mayor a 0.");
+    return;
+  }
+
+  const camposRequeridos = [
+    "Concepto",
+    "Monto",
+    "Día de Pago",
+    "Método de Pago",
+    "Destino",
+    "Recurrencia",
+    "Moneda",
+    "COP",
+    "Tipo",
+    "Categoria",
+    "Etiqueta",
+    "Naturaleza",
+    "Activo",
+    "Versión presupuesto",
+    "Origen del registro",
+    "Estado de ejecución"
+  ];
+
+  const faltantes = camposRequeridos.filter(campo => {
+    const valor = datosPlan[campo];
+    return valor === "" || valor === null || valor === undefined;
+  });
+
+  if (faltantes.length > 0) {
+    ui.alert(
+      "Antes de aplicar el plan, completa estos campos en la tabla del plan en Diagnóstico:\n\n" +
+      faltantes.join("\n")
+    );
+    return;
+  }
+
+  const headersPresupuesto = presupuesto
+    .getRange(1, 1, 1, presupuesto.getLastColumn())
+    .getValues()[0];
+
+  const headerMap = crearMapaHeaders_(headersPresupuesto);
+
+  const columnasPresupuesto = [
+    "Concepto",
+    "Monto",
+    "Día de Pago",
+    "Método de Pago",
+    "Destino",
+    "Destino_TC",
+    "Recurrencia",
+    "Moneda",
+    "COP",
+    "Tipo",
+    "Categoria",
+    "Etiqueta",
+    "Naturaleza",
+    "Activo",
+    "Versión presupuesto",
+    "Origen del registro",
+    "Estado de ejecución"
+  ];
+
+  const columnasFaltantes = columnasPresupuesto.filter(nombre => !headerMap[nombre]);
+
+  if (columnasFaltantes.length > 0) {
+    ui.alert(
+      "Faltan estas columnas en Presupuesto o tienen otro nombre:\n\n" +
+      columnasFaltantes.join("\n")
+    );
+    return;
+  }
+
+  const filaExistente = buscarPlanActivoExistente_(presupuesto, headerMap);
+
+  if (filaExistente) {
+    const respuesta = ui.alert(
+      "Ya existe un plan de patrimonio activo en Presupuesto.",
+      "¿Quieres desactivarlo y crear uno nuevo con el valor actual del Diagnóstico?",
+      ui.ButtonSet.YES_NO
+    );
+
+    if (respuesta !== ui.Button.YES) {
+      ui.alert("No se aplicó ningún cambio.");
+      return;
+    }
+
+    presupuesto.getRange(filaExistente, headerMap["Activo"]).setValue("Inactivo");
+    presupuesto.getRange(filaExistente, headerMap["Estado de ejecución"]).setValue("Omitido");
+  }
+
+  const nuevaFila = new Array(headersPresupuesto.length).fill("");
+
+  columnasPresupuesto.forEach(nombre => {
+    if (nombre === "Destino_TC") {
+      nuevaFila[headerMap[nombre] - 1] = "";
+    } else {
+      nuevaFila[headerMap[nombre] - 1] = datosPlan[nombre] || "";
+    }
+  });
+
+  presupuesto.appendRow(nuevaFila);
+
+  const nuevaFilaIndex = presupuesto.getLastRow();
+
+  if (typeof refrescarEtiquetaRelacionalEnFila_ === "function") {
+    refrescarEtiquetaRelacionalEnFila_(presupuesto, nuevaFilaIndex, {
+      naturalezaCol: headerMap["Naturaleza"],
+      categoriaCol: headerMap["Categoria"],
+      etiquetaCol: headerMap["Etiqueta"],
+      etiquetasAdicionalesCol: null
+    });
+  }
+
+  ui.alert("Plan aplicado correctamente al Presupuesto.");
+}
+
+function leerTablaPlanDiagnostico_(diagnostico) {
+  const tabla = obtenerUbicacionTablaPlanDiagnostico_(diagnostico);
+
+  if (!tabla) return null;
+
+  const data = diagnostico
+    .getRange(1, 1, diagnostico.getLastRow(), diagnostico.getLastColumn())
+    .getValues();
+
+  const resultado = {};
+
+  for (let r = tabla.headerRowIndex + 1; r < data.length; r++) {
+    const campo = String(data[r][tabla.campoColIndex]).trim();
+    const valor = data[r][tabla.valorColIndex];
+
+    if (!campo) continue;
+
+    resultado[campo] = valor;
+  }
+
+  return Object.keys(resultado).length > 0 ? resultado : null;
+}
+
+function obtenerUbicacionTablaPlanDiagnostico_(diagnostico) {
+  const data = diagnostico
+    .getRange(1, 1, diagnostico.getLastRow(), diagnostico.getLastColumn())
+    .getValues();
+
+  for (let r = 0; r < data.length; r++) {
+    for (let c = 0; c < data[r].length - 1; c++) {
+      const campo = String(data[r][c]).trim();
+      const valor = String(data[r][c + 1]).trim();
+
+      if (campo === "Campo" && valor === "Valor") {
+        return {
+          headerRowIndex: r,
+          campoColIndex: c,
+          valorColIndex: c + 1,
+          headerRow: r + 1,
+          campoCol: c + 1,
+          valorCol: c + 2
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function buscarCampoEnTablaPlan_(sheet, tabla, nombreCampo) {
+  const data = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getValues();
+
+  for (let r = tabla.headerRowIndex + 1; r < data.length; r++) {
+    const campo = String(data[r][tabla.campoColIndex]).trim();
+
+    if (campo === nombreCampo) {
+      return {
+        row: r + 1,
+        labelCol: tabla.campoCol,
+        valueCol: tabla.valorCol
+      };
+    }
+  }
+
+  return null;
+}
+
+function aplicarSelectorDiagnostico_(sheet, row, valueCol, rangoA1) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const rango = ss.getRange(rangoA1);
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(rango, true)
+    .setAllowInvalid(false)
+    .build();
+
+  sheet.getRange(row, valueCol).setDataValidation(rule);
+}
+
+function crearMapaHeaders_(headers) {
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const limpio = String(header).trim();
+
+    if (limpio) {
+      map[limpio] = index + 1;
+    }
+  });
+
+  return map;
+}
+
+function buscarPlanActivoExistente_(presupuesto, headerMap) {
+  const lastRow = presupuesto.getLastRow();
+
+  if (lastRow < 2) return null;
+
+  const data = presupuesto
+    .getRange(2, 1, lastRow - 1, presupuesto.getLastColumn())
+    .getValues();
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+
+    const concepto = row[headerMap["Concepto"] - 1];
+    const activo = row[headerMap["Activo"] - 1];
+    const version = row[headerMap["Versión presupuesto"] - 1];
+    const origen = row[headerMap["Origen del registro"] - 1];
+
+    if (
+      String(concepto).trim() === "Movimiento sugerido a patrimonio" &&
+      String(activo).trim() === "Activo" &&
+      String(version).trim() === "Planeado" &&
+      String(origen).trim() === "Sugerido por diagnóstico"
+    ) {
+      return i + 2;
+    }
+  }
+
+  return null;
+}
