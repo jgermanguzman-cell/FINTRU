@@ -1,0 +1,3369 @@
+/***************************************
+ * FINTRU — METAS Y BOLSILLOS VIRTUALES
+ * Archivo: Metas.gs
+ ***************************************/
+
+
+/***************************************
+ * M1 — CATÁLOGOS DE METAS
+ ***************************************/
+
+function setupMetas_M1_Catalogos() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Catálogos') || ss.getSheetByName('Catalogos') || ss.insertSheet('Catálogos');
+
+  const catalogs = [
+    {
+      rangeName: 'cat_tipo_meta',
+      header: 'Tipo meta',
+      values: ['Consumo', 'Patrimonio', 'Deuda', 'Ahorro', 'Inversión', 'Libertad financiera']
+    },
+    {
+      rangeName: 'cat_prioridad_meta',
+      header: 'Prioridad meta',
+      values: ['Alta', 'Media', 'Baja']
+    },
+    {
+      rangeName: 'cat_tipo_movimiento_meta',
+      header: 'Tipo movimiento meta',
+      values: ['Asignación virtual', 'Retiro virtual', 'Ajuste manual']
+    },
+    {
+      rangeName: 'cat_estado_meta',
+      header: 'Estado meta',
+      values: ['Activa', 'Pausada', 'Completada', 'Cancelada']
+    }
+  ];
+
+  catalogs.forEach(catalog => {
+    upsertCatalogoMetas_(ss, sheet, catalog.rangeName, catalog.header, catalog.values);
+  });
+
+  SpreadsheetApp.flush();
+}
+
+
+function upsertCatalogoMetas_(ss, defaultSheet, rangeName, header, values) {
+  const existingNamedRange = ss.getNamedRanges().find(namedRange => namedRange.getName() === rangeName);
+
+  let sheet = defaultSheet;
+  let startRow = 2;
+  let col = null;
+
+  if (existingNamedRange) {
+    const existingRange = existingNamedRange.getRange();
+
+    sheet = existingRange.getSheet();
+    startRow = existingRange.getRow();
+    col = existingRange.getColumn();
+
+    const rowsToClear = Math.max(existingRange.getNumRows(), values.length);
+    sheet.getRange(startRow, col, rowsToClear, 1).clearContent().clearDataValidations();
+
+    if (startRow > 1) {
+      sheet.getRange(startRow - 1, col).setValue(header);
+    }
+  } else {
+    col = findCatalogHeaderColumn_(sheet, header);
+
+    if (!col) {
+      col = Math.max(sheet.getLastColumn() + 1, 1);
+      sheet.getRange(1, col).setValue(header);
+    }
+
+    sheet.getRange(2, col, Math.max(values.length, 20), 1).clearContent().clearDataValidations();
+  }
+
+  const output = values.map(value => [value]);
+  const targetRange = sheet.getRange(startRow, col, output.length, 1);
+
+  targetRange.setValues(output);
+  ss.setNamedRange(rangeName, targetRange);
+
+  sheet.getRange(1, col).setFontWeight('bold');
+  sheet.autoResizeColumn(col);
+}
+
+
+function findCatalogHeaderColumn_(sheet, header) {
+  const lastCol = sheet.getLastColumn();
+
+  if (lastCol < 1) {
+    return null;
+  }
+
+  const headers = sheet
+    .getRange(1, 1, 1, lastCol)
+    .getValues()[0]
+    .map(value => String(value).trim().toLowerCase());
+
+  const target = String(header).trim().toLowerCase();
+  const index = headers.indexOf(target);
+
+  return index >= 0 ? index + 1 : null;
+}
+
+
+function verificarMetas_M1_Catalogos() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const rangeNames = [
+    'cat_tipo_meta',
+    'cat_prioridad_meta',
+    'cat_tipo_movimiento_meta',
+    'cat_estado_meta'
+  ];
+
+  rangeNames.forEach(rangeName => {
+    const namedRange = ss.getNamedRanges().find(item => item.getName() === rangeName);
+
+    if (!namedRange) {
+      Logger.log(rangeName + ': NO EXISTE');
+      return;
+    }
+
+    const range = namedRange.getRange();
+    const values = range.getValues().flat().filter(String);
+
+    Logger.log(rangeName + ': OK → ' + range.getA1Notation() + ' → ' + values.join(', '));
+  });
+}
+
+
+/***************************************
+ * M2 — HOJA METAS
+ ***************************************/
+
+function setupMetas_M2_HojaMetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const sheetName = 'Metas';
+  let sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+
+  const headers = [
+    'ID_Meta',
+    'Nombre',
+    'Tipo meta',
+    'Categoría relacionada',
+    'Cuenta referencia',
+    'Deuda relacionada',
+    'Monto objetivo',
+    'Saldo inicial / asignado',
+    'Saldo calculado',
+    'Aporte mensual sugerido',
+    'Fecha objetivo',
+    'Prioridad',
+    'Estado'
+  ];
+
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#f3f4f6');
+
+  sheet.setFrozenRows(1);
+
+  const maxRows = 1000;
+  const dataStartRow = 2;
+
+  aplicarValidacionRangoNombradoMetas_(ss, sheet, 'C', dataStartRow, maxRows, 'cat_tipo_meta');
+  aplicarValidacionRangoNombradoMetas_(ss, sheet, 'D', dataStartRow, maxRows, 'cat_categorias');
+  aplicarValidacionRangoNombradoMetas_(ss, sheet, 'L', dataStartRow, maxRows, 'cat_prioridad_meta');
+  aplicarValidacionRangoNombradoMetas_(ss, sheet, 'M', dataStartRow, maxRows, 'cat_estado_meta');
+
+  aplicarValidacionListaMetas_(sheet, 'E', dataStartRow, maxRows, obtenerCuentasActivasMetas_(ss));
+  aplicarValidacionListaMetas_(sheet, 'F', dataStartRow, maxRows, obtenerDeudasActivasMetas_(ss));
+
+  aplicarFormatoMetas_(sheet);
+
+  SpreadsheetApp.flush();
+}
+
+
+function aplicarValidacionRangoNombradoMetas_(ss, sheet, columnLetter, startRow, maxRows, namedRangeName) {
+  const namedRange = ss.getNamedRanges().find(item => item.getName() === namedRangeName);
+
+  if (!namedRange) {
+    Logger.log('No existe el rango con nombre: ' + namedRangeName);
+    return;
+  }
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(namedRange.getRange(), true)
+    .setAllowInvalid(false)
+    .build();
+
+  const column = columnLetterToNumberMetas_(columnLetter);
+  sheet.getRange(startRow, column, maxRows, 1).setDataValidation(rule);
+}
+
+
+function aplicarValidacionListaMetas_(sheet, columnLetter, startRow, maxRows, values) {
+  const column = columnLetterToNumberMetas_(columnLetter);
+
+  if (!values || values.length === 0) {
+    Logger.log('No hay valores para validar en columna ' + columnLetter);
+    sheet.getRange(startRow, column, maxRows, 1).clearDataValidations();
+    return;
+  }
+
+  const uniqueValues = [...new Set(values.filter(String))];
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(uniqueValues, true)
+    .setAllowInvalid(false)
+    .build();
+
+  sheet.getRange(startRow, column, maxRows, 1).setDataValidation(rule);
+}
+
+
+function obtenerCuentasActivasMetas_(ss) {
+  const sheet = ss.getSheetByName('Cuentas');
+
+  if (!sheet) {
+    Logger.log('No existe la hoja Cuentas');
+    return [];
+  }
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return [];
+
+  const data = sheet.getRange(2, 2, lastRow - 1, 9).getValues();
+  // Dentro de este rango:
+  // B = Nombre → índice 0
+  // J = Estado → índice 8
+
+  return data
+    .filter(row => {
+      const nombre = String(row[0] || '').trim();
+      const estado = String(row[8] || '').trim().toLowerCase();
+
+      if (!nombre) return false;
+
+      return estado === '' ||
+        estado === 'activa' ||
+        estado === 'activo' ||
+        estado === 'vigente';
+    })
+    .map(row => String(row[0]).trim());
+}
+
+
+function obtenerDeudasActivasMetas_(ss) {
+  const sheet = ss.getSheetByName('Deudas');
+
+  if (!sheet) {
+    Logger.log('No existe la hoja Deudas');
+    return [];
+  }
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return [];
+
+  const data = sheet.getRange(2, 2, lastRow - 1, 12).getValues();
+  // Dentro de este rango:
+  // B = Nombre → índice 0
+  // M = Estado → índice 11
+
+  return data
+    .filter(row => {
+      const nombre = String(row[0] || '').trim();
+      const estado = String(row[11] || '').trim().toLowerCase();
+
+      if (!nombre) return false;
+
+      return estado === '' ||
+        estado === 'activa' ||
+        estado === 'activo' ||
+        estado === 'vigente';
+    })
+    .map(row => String(row[0]).trim());
+}
+
+
+function aplicarFormatoMetas_(sheet) {
+  sheet.setColumnWidths(1, 13, 160);
+
+  sheet.getRange('A:A').setNumberFormat('@');
+  sheet.getRange('G:J').setNumberFormat('$#,##0');
+  sheet.getRange('K:K').setNumberFormat('dd/mm/yyyy');
+
+  sheet.getRange('A:M').setVerticalAlignment('middle');
+
+  sheet.setColumnWidth(1, 140);
+  sheet.setColumnWidth(2, 180);
+  sheet.setColumnWidth(3, 150);
+  sheet.setColumnWidth(4, 180);
+  sheet.setColumnWidth(5, 180);
+  sheet.setColumnWidth(6, 180);
+  sheet.setColumnWidth(7, 150);
+  sheet.setColumnWidth(8, 180);
+  sheet.setColumnWidth(9, 150);
+  sheet.setColumnWidth(10, 180);
+  sheet.setColumnWidth(11, 140);
+  sheet.setColumnWidth(12, 120);
+  sheet.setColumnWidth(13, 120);
+
+  const filter = sheet.getFilter();
+
+  if (!filter) {
+    sheet.getRange('A1:M1').createFilter();
+  }
+}
+
+
+function verificarMetas_M2_HojaMetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Metas');
+
+  if (!sheet) {
+    Logger.log('La hoja Metas NO existe');
+    return;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, 13).getValues()[0];
+
+  Logger.log('Hoja Metas: OK');
+  Logger.log('Encabezados: ' + headers.join(' | '));
+  Logger.log('Validación Tipo meta: ' + validarCeldaConDataValidationMetas_(sheet.getRange('C2')));
+  Logger.log('Validación Categoría relacionada: ' + validarCeldaConDataValidationMetas_(sheet.getRange('D2')));
+  Logger.log('Validación Cuenta referencia: ' + validarCeldaConDataValidationMetas_(sheet.getRange('E2')));
+  Logger.log('Validación Deuda relacionada: ' + validarCeldaConDataValidationMetas_(sheet.getRange('F2')));
+  Logger.log('Validación Prioridad: ' + validarCeldaConDataValidationMetas_(sheet.getRange('L2')));
+  Logger.log('Validación Estado: ' + validarCeldaConDataValidationMetas_(sheet.getRange('M2')));
+}
+
+
+function validarCeldaConDataValidationMetas_(range) {
+  return range.getDataValidation() ? 'OK' : 'SIN VALIDACIÓN';
+}
+
+
+/***************************************
+ * UTILIDADES GENERALES METAS
+ ***************************************/
+
+function columnLetterToNumberMetas_(letter) {
+  let column = 0;
+  const length = letter.length;
+
+  for (let i = 0; i < length; i++) {
+    column += (letter.charCodeAt(i) - 64) * Math.pow(26, length - i - 1);
+  }
+
+  return column;
+}
+
+/***************************************
+ * M3 — HOJA APORTES_METAS
+ ***************************************/
+
+function setupMetas_M3_HojaAportesMetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const sheetName = 'Aportes_Metas';
+  let sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+
+  const headers = [
+    'Fecha',
+    'Meta',
+    'Cuenta referencia',
+    'Tipo movimiento meta',
+    'Monto'
+  ];
+
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#f3f4f6');
+
+  sheet.setFrozenRows(1);
+
+  const maxRows = 1000;
+  const dataStartRow = 2;
+
+  aplicarValidacionListaMetas_(sheet, 'B', dataStartRow, maxRows, obtenerMetasActivasMetas_(ss));
+  aplicarValidacionListaMetas_(sheet, 'C', dataStartRow, maxRows, obtenerCuentasActivasMetas_(ss));
+  aplicarValidacionRangoNombradoMetas_(ss, sheet, 'D', dataStartRow, maxRows, 'cat_tipo_movimiento_meta');
+
+  aplicarFormatoAportesMetas_(sheet);
+
+  SpreadsheetApp.flush();
+}
+
+
+function obtenerMetasActivasMetas_(ss) {
+  const sheet = ss.getSheetByName('Metas');
+
+  if (!sheet) {
+    Logger.log('No existe la hoja Metas');
+    return [];
+  }
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return [];
+
+  const data = sheet.getRange(2, 2, lastRow - 1, 12).getValues();
+  // Dentro de este rango:
+  // B = Nombre → índice 0
+  // M = Estado → índice 11
+
+  return data
+    .filter(row => {
+      const nombre = String(row[0] || '').trim();
+      const estado = String(row[11] || '').trim().toLowerCase();
+
+      if (!nombre) return false;
+
+      return estado === 'activa' ||
+        estado === 'activo' ||
+        estado === 'vigente';
+    })
+    .map(row => String(row[0]).trim());
+}
+
+
+function aplicarFormatoAportesMetas_(sheet) {
+  sheet.setColumnWidths(1, 5, 170);
+
+  sheet.getRange('A:A').setNumberFormat('dd/mm/yyyy');
+  sheet.getRange('E:E').setNumberFormat('$#,##0');
+
+  sheet.getRange('A:E').setVerticalAlignment('middle');
+
+  sheet.setColumnWidth(1, 130);
+  sheet.setColumnWidth(2, 200);
+  sheet.setColumnWidth(3, 200);
+  sheet.setColumnWidth(4, 190);
+  sheet.setColumnWidth(5, 140);
+
+  const filter = sheet.getFilter();
+
+  if (!filter) {
+    sheet.getRange('A1:E1').createFilter();
+  }
+}
+
+
+function verificarMetas_M3_HojaAportesMetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Aportes_Metas');
+
+  if (!sheet) {
+    Logger.log('La hoja Aportes_Metas NO existe');
+    return;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, 5).getValues()[0];
+
+  Logger.log('Hoja Aportes_Metas: OK');
+  Logger.log('Encabezados: ' + headers.join(' | '));
+  Logger.log('Validación Meta: ' + validarCeldaConDataValidationMetas_(sheet.getRange('B2')));
+  Logger.log('Validación Cuenta referencia: ' + validarCeldaConDataValidationMetas_(sheet.getRange('C2')));
+  Logger.log('Validación Tipo movimiento meta: ' + validarCeldaConDataValidationMetas_(sheet.getRange('D2')));
+}
+
+/***************************************
+ * M4A — AGREGAR COLUMNA META
+ * EN PRESUPUESTO Y MOVIMIENTOS
+ ***************************************/
+
+function setupMetas_M4A_ColumnasMeta() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const metasActivas = obtenerMetasActivasMetas_(ss);
+
+  const presupuesto = asegurarColumnaMetaDespuesDeEtiqueta_(ss, 'Presupuesto');
+  const movimientos = asegurarColumnaMetaDespuesDeEtiqueta_(ss, 'Movimientos');
+
+  if (presupuesto && presupuesto.metaCol) {
+    aplicarValidacionMetaActivaEnColumna_(presupuesto.sheet, presupuesto.metaCol, metasActivas);
+    Logger.log('Presupuesto: columna Meta OK en columna ' + presupuesto.metaCol);
+  }
+
+  if (movimientos && movimientos.metaCol) {
+    aplicarValidacionMetaActivaEnColumna_(movimientos.sheet, movimientos.metaCol, metasActivas);
+    Logger.log('Movimientos: columna Meta OK en columna ' + movimientos.metaCol);
+  }
+
+  SpreadsheetApp.flush();
+}
+
+
+function asegurarColumnaMetaDespuesDeEtiqueta_(ss, sheetName) {
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error('No existe la hoja: ' + sheetName);
+  }
+
+  const etiquetaCol = buscarColumnaPorEncabezadoMetas_(sheet, 'Etiqueta');
+  const metaColExistente = buscarColumnaPorEncabezadoMetas_(sheet, 'Meta');
+
+  if (!etiquetaCol) {
+    throw new Error('No se encontró la columna Etiqueta en la hoja: ' + sheetName);
+  }
+
+  if (metaColExistente) {
+    Logger.log(sheetName + ': la columna Meta ya existe en columna ' + metaColExistente);
+    return {
+      sheet,
+      metaCol: metaColExistente,
+      created: false
+    };
+  }
+
+  sheet.insertColumnAfter(etiquetaCol);
+
+  const metaCol = etiquetaCol + 1;
+  sheet.getRange(1, metaCol).setValue('Meta');
+
+  sheet.getRange(1, metaCol)
+    .setFontWeight('bold')
+    .setBackground('#f3f4f6');
+
+  sheet.setColumnWidth(metaCol, 180);
+
+  Logger.log(sheetName + ': columna Meta creada en columna ' + metaCol);
+
+  return {
+    sheet,
+    metaCol,
+    created: true
+  };
+}
+
+
+function aplicarValidacionMetaActivaEnColumna_(sheet, columnNumber, metasActivas) {
+  const maxRows = 1000;
+  const startRow = 2;
+
+  const range = sheet.getRange(startRow, columnNumber, maxRows, 1);
+
+  if (!metasActivas || metasActivas.length === 0) {
+    Logger.log('No hay metas activas para validar en hoja: ' + sheet.getName());
+    range.clearDataValidations();
+    return;
+  }
+
+  const uniqueMetas = [...new Set(metasActivas.filter(String))];
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(uniqueMetas, true)
+    .setAllowInvalid(false)
+    .build();
+
+  range.setDataValidation(rule);
+}
+
+
+function buscarColumnaPorEncabezadoMetas_(sheet, headerName) {
+  const lastCol = sheet.getLastColumn();
+
+  if (lastCol < 1) return null;
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  const target = normalizarTextoMetas_(headerName);
+
+  const aliases = {
+    [normalizarTextoMetas_("Saldo inicial")]: [
+      normalizarTextoMetas_("Saldo inicial"),
+      normalizarTextoMetas_("Saldo inicial / asignado")
+    ],
+    [normalizarTextoMetas_("Saldo inicial / asignado")]: [
+      normalizarTextoMetas_("Saldo inicial"),
+      normalizarTextoMetas_("Saldo inicial / asignado")
+    ]
+  };
+
+  const validTargets = aliases[target] || [target];
+
+  for (let i = 0; i < headers.length; i++) {
+    const currentHeader = normalizarTextoMetas_(headers[i]);
+
+    if (validTargets.includes(currentHeader)) {
+      return i + 1;
+    }
+  }
+
+  return null;
+}
+
+
+function normalizarTextoMetas_(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+
+function verificarMetas_M4A_ColumnasMeta() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  verificarColumnaMetaEnHoja_(ss, 'Presupuesto');
+  verificarColumnaMetaEnHoja_(ss, 'Movimientos');
+}
+
+
+function verificarColumnaMetaEnHoja_(ss, sheetName) {
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    Logger.log(sheetName + ': NO EXISTE');
+    return;
+  }
+
+  const etiquetaCol = buscarColumnaPorEncabezadoMetas_(sheet, 'Etiqueta');
+  const metaCol = buscarColumnaPorEncabezadoMetas_(sheet, 'Meta');
+
+  if (!etiquetaCol) {
+    Logger.log(sheetName + ': NO se encontró Etiqueta');
+    return;
+  }
+
+  if (!metaCol) {
+    Logger.log(sheetName + ': NO se encontró Meta');
+    return;
+  }
+
+  const validacion = sheet.getRange(2, metaCol).getDataValidation() ? 'OK' : 'SIN VALIDACIÓN';
+
+  Logger.log(sheetName + ': Etiqueta columna ' + etiquetaCol);
+  Logger.log(sheetName + ': Meta columna ' + metaCol);
+  Logger.log(sheetName + ': Validación Meta: ' + validacion);
+
+  if (metaCol === etiquetaCol + 1) {
+    Logger.log(sheetName + ': OK → Meta está justo después de Etiqueta');
+  } else {
+    Logger.log(sheetName + ': REVISAR → Meta existe, pero no está justo después de Etiqueta');
+  }
+}
+/***************************************
+ * M4B — UTILIDADES PARA REGISTRAR
+ * MOVIMIENTOS CON META POR ENCABEZADOS
+ ***************************************/
+
+function diagnosticarMetas_M4B_EstructuraParaScripts() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  diagnosticarHeadersMetas_(ss, 'Presupuesto', [
+    'Concepto',
+    'Monto',
+    'Día de Pago',
+    'Método de Pago',
+    'Destino',
+    'Destino_TC',
+    'Destino_Deuda',
+    'Recurrencia',
+    'Moneda',
+    'COP',
+    'Tipo',
+    'Categoria',
+    'Naturaleza',
+    'Etiqueta',
+    'Meta',
+    'Activo',
+    'Versión presupuesto',
+    'Origen del registro',
+    'Estado de ejecución'
+  ]);
+
+  diagnosticarHeadersMetas_(ss, 'Movimientos', [
+    'ID_Movimiento',
+    'Fecha',
+    'Concepto',
+    'Monto',
+    'Moneda',
+    'COP',
+    'Método de pago',
+    'Tipo método',
+    'Destino',
+    'Destino_TC',
+    'Destino_Deuda',
+    'Categoría',
+    'Naturaleza',
+    'Etiqueta',
+    'Meta',
+    'Origen ejecución',
+    'Ref_Presupuesto'
+  ]);
+}
+
+
+function diagnosticarHeadersMetas_(ss, sheetName, expectedHeaders) {
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    Logger.log(sheetName + ': NO EXISTE');
+    return;
+  }
+
+  const headerMap = obtenerMapaHeadersMetas_(sheet);
+
+  Logger.log('--- ' + sheetName + ' ---');
+
+  expectedHeaders.forEach(header => {
+    const col = headerMap[normalizarTextoMetas_(header)];
+
+    if (col) {
+      Logger.log(header + ': OK → columna ' + col);
+    } else {
+      Logger.log(header + ': FALTA');
+    }
+  });
+}
+
+
+function obtenerMapaHeadersMetas_(sheet) {
+  const lastCol = sheet.getLastColumn();
+
+  if (lastCol < 1) return {};
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const key = normalizarTextoMetas_(header);
+
+    if (key) {
+      map[key] = index + 1;
+    }
+  });
+
+  return map;
+}
+
+
+function obtenerValorPorHeaderMetas_(sheet, rowNumber, headerName) {
+  const headerMap = obtenerMapaHeadersMetas_(sheet);
+  const col = headerMap[normalizarTextoMetas_(headerName)];
+
+  if (!col) return '';
+
+  return sheet.getRange(rowNumber, col).getValue();
+}
+
+
+function escribirValorPorHeaderMetas_(sheet, rowNumber, headerName, value) {
+  const headerMap = obtenerMapaHeadersMetas_(sheet);
+  const col = headerMap[normalizarTextoMetas_(headerName)];
+
+  if (!col) {
+    throw new Error('No existe la columna "' + headerName + '" en la hoja ' + sheet.getName());
+  }
+
+  sheet.getRange(rowNumber, col).setValue(value);
+}
+
+
+function crearMovimientoDesdeObjetoMetas_(movimiento) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Movimientos');
+
+  if (!sheet) {
+    throw new Error('No existe la hoja Movimientos');
+  }
+
+  const headerMap = obtenerMapaHeadersMetas_(sheet);
+  const lastCol = sheet.getLastColumn();
+
+  const nextRow = obtenerPrimeraFilaVaciaMovimientoMetas_(sheet);
+
+  const metaCol = buscarColumnaPorEncabezadoMetas_(sheet, 'Meta');
+
+  if (metaCol) {
+    sheet.getRange(nextRow, metaCol).clearDataValidations();
+  }
+
+  const row = new Array(lastCol).fill('');
+
+  setRowValueByHeaderMetas_(row, headerMap, 'ID_Movimiento', movimiento.idMovimiento || generarIdMovimientoMetas_());
+  setRowValueByHeaderMetas_(row, headerMap, 'Fecha', movimiento.fecha || new Date());
+  setRowValueByHeaderMetas_(row, headerMap, 'Concepto', movimiento.concepto || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Monto', movimiento.monto || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Moneda', movimiento.moneda || 'COP');
+  setRowValueByHeaderMetas_(row, headerMap, 'COP', movimiento.cop || movimiento.monto || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Método de pago', movimiento.metodoPago || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Tipo método', movimiento.tipoMetodo || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Destino', movimiento.destino || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Destino_TC', movimiento.destinoTC || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Destino_Deuda', movimiento.destinoDeuda || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Categoría', movimiento.categoria || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Naturaleza', movimiento.naturaleza || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Etiqueta', movimiento.etiqueta || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Meta', movimiento.meta || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Origen ejecución', movimiento.origenEjecucion || '');
+  setRowValueByHeaderMetas_(row, headerMap, 'Ref_Presupuesto', movimiento.refPresupuesto || '');
+
+  sheet.getRange(nextRow, 1, 1, lastCol).setValues([row]);
+
+  refrescarValidacionMetaEnFilaMovimiento_(sheet, nextRow);
+
+  if (typeof aplicarValidacionEtiquetaEnFilaMovimiento_ === 'function') {
+    try {
+      aplicarValidacionEtiquetaEnFilaMovimiento_(nextRow);
+    } catch (error) {
+      Logger.log('No se pudo aplicar validación relacional de etiqueta en fila ' + nextRow + ': ' + error.message);
+    }
+  }
+
+  if (typeof aplicarValidacionEtiquetaMovimiento_ === 'function') {
+    try {
+      aplicarValidacionEtiquetaMovimiento_(sheet, nextRow);
+    } catch (error) {
+      Logger.log('No se pudo aplicar validación de etiqueta en fila ' + nextRow + ': ' + error.message);
+    }
+  }
+
+  return nextRow;
+}
+
+
+function setRowValueByHeaderMetas_(row, headerMap, headerName, value) {
+  const col = headerMap[normalizarTextoMetas_(headerName)];
+
+  if (!col) return;
+
+  row[col - 1] = value;
+}
+
+
+function generarIdMovimientoMetas_() {
+  const now = new Date();
+
+  return 'MOV-' +
+    Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss') +
+    '-' +
+    Math.floor(Math.random() * 10000);
+}
+
+
+function refrescarValidacionMetaEnFilaMovimiento_(sheet, rowNumber) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const metaCol = buscarColumnaPorEncabezadoMetas_(sheet, 'Meta');
+
+  if (!metaCol) return;
+
+  const metasActivas = obtenerMetasActivasMetas_(ss);
+
+  if (!metasActivas || metasActivas.length === 0) {
+    sheet.getRange(rowNumber, metaCol).clearDataValidations();
+    return;
+  }
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([...new Set(metasActivas.filter(String))], true)
+    .setAllowInvalid(false)
+    .build();
+
+  sheet.getRange(rowNumber, metaCol).setDataValidation(rule);
+}
+
+
+function construirMovimientoDesdeFilaPresupuestoMetas_(presupuestoSheet, rowNumber, origenEjecucion) {
+  return {
+    fecha: new Date(),
+    concepto: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Concepto'),
+    monto: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Monto'),
+    moneda: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Moneda') || 'COP',
+    cop: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'COP') || obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Monto'),
+    metodoPago: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Método de Pago'),
+    tipoMetodo: '',
+    destino: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Destino'),
+    destinoTC: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Destino_TC'),
+    destinoDeuda: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Destino_Deuda'),
+    categoria: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Categoria'),
+    naturaleza: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Naturaleza'),
+    etiqueta: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Etiqueta'),
+    meta: obtenerValorPorHeaderMetas_(presupuestoSheet, rowNumber, 'Meta'),
+    origenEjecucion: origenEjecucion || 'Automático desde presupuesto',
+    refPresupuesto: 'PRESUPUESTO-F' + rowNumber
+  };
+}
+
+
+function pruebaMetas_M4B_CrearMovimientoDesdePresupuesto() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const presupuestoSheet = ss.getSheetByName('Presupuesto');
+
+  if (!presupuestoSheet) {
+    throw new Error('No existe la hoja Presupuesto');
+  }
+
+  const rowNumber = 2;
+  const movimiento = construirMovimientoDesdeFilaPresupuestoMetas_(
+    presupuestoSheet,
+    rowNumber,
+    'Prueba técnica metas'
+  );
+
+  Logger.log(JSON.stringify(movimiento, null, 2));
+
+  const nuevaFila = crearMovimientoDesdeObjetoMetas_(movimiento);
+
+  Logger.log('Movimiento de prueba creado en fila: ' + nuevaFila);
+}
+/***************************************
+ * M5 — CÁLCULOS DE METAS
+ * Saldo, avance, disponible y estado
+ ***************************************/
+
+function setupMetas_M5_Calculos() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shMetas = ss.getSheetByName("Metas");
+  const shAportes = ss.getSheetByName("Aportes_Metas");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shMetas || !shAportes || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Metas, Aportes_Metas o Movimientos.");
+  }
+
+  validarColumnasM5_(shMetas, shAportes, shMovimientos);
+
+  const headersExtra = [
+    {
+      col: 14,
+      name: "Avance %"
+    },
+    {
+      col: 15,
+      name: "Disponible / avance"
+    },
+    {
+      col: 16,
+      name: "Estado avance"
+    }
+  ];
+
+  headersExtra.forEach(item => {
+    shMetas.getRange(1, item.col).setValue(item.name);
+  });
+
+  shMetas.getRange(1, 1, 1, 16)
+    .setFontWeight("bold")
+    .setBackground("#f3f4f6");
+
+  const startRow = 2;
+  const numRows = 999;
+
+  const formulasSaldo = [];
+  const formulasAporteMensual = [];
+  const formulasAvance = [];
+  const formulasDisponibleAvance = [];
+  const formulasEstadoAvance = [];
+
+  for (let i = 0; i < numRows; i++) {
+    const row = startRow + i;
+
+    const baseVirtual = construirFormulaBaseVirtualM5_(row);
+
+    const formulaSaldo = `=IF($B${row}="";"";SWITCH($C${row};"Consumo";${baseVirtual}-IFERROR(SUMIFS(Movimientos!$F:$F;Movimientos!$O:$O;$B${row};Movimientos!$M:$M;"Egreso");0);"Deuda";${baseVirtual}+IFERROR(SUMIFS(Movimientos!$F:$F;Movimientos!$O:$O;$B${row};Movimientos!$M:$M;"Transferencia");0);${baseVirtual}+IFERROR(SUMIFS(Movimientos!$F:$F;Movimientos!$O:$O;$B${row};Movimientos!$L:$L;"Patrimonio");0)))`;
+
+    const formulaAporteMensual = `=IF($B${row}="";"";IF(OR($G${row}="";$G${row}<=0);"";IF($K${row}="";MAX(0;$G${row}-$I${row});IF($K${row}<TODAY();MAX(0;$G${row}-$I${row});MAX(0;($G${row}-$I${row})/MAX(1;DATEDIF(TODAY();$K${row};"M")+1))))))`;
+
+    const formulaAvance = `=IF($B${row}="";"";IFERROR(MIN($I${row}/$G${row};1);""))`;
+
+    const formulaDisponibleAvance = `=IF($B${row}="";"";IF($C${row}="Consumo";TEXT($I${row};"$#,##0")&" disponibles";TEXT($N${row};"0%")&" avance"))`;
+
+    const formulaEstadoAvance = `=IF($B${row}="";"";IF($M${row}<>"Activa";"Meta no activa";IF(OR($G${row}="";$G${row}<=0);"Sin objetivo";IF($N${row}>=1;"Completada";IF(AND($K${row}<>"";$K${row}<TODAY());"Atrasada";IF($N${row}>=0,7;"En buen camino";IF($N${row}>=0,3;"En progreso";"Arrancando")))))))`;
+
+    formulasSaldo.push([formulaSaldo]);
+    formulasAporteMensual.push([formulaAporteMensual]);
+    formulasAvance.push([formulaAvance]);
+    formulasDisponibleAvance.push([formulaDisponibleAvance]);
+    formulasEstadoAvance.push([formulaEstadoAvance]);
+  }
+
+  shMetas.getRange(startRow, 9, numRows, 1).setFormulas(formulasSaldo); // I
+  shMetas.getRange(startRow, 10, numRows, 1).setFormulas(formulasAporteMensual); // J
+  shMetas.getRange(startRow, 14, numRows, 1).setFormulas(formulasAvance); // N
+  shMetas.getRange(startRow, 15, numRows, 1).setFormulas(formulasDisponibleAvance); // O
+  shMetas.getRange(startRow, 16, numRows, 1).setFormulas(formulasEstadoAvance); // P
+
+  aplicarFormatoMetasM5_(shMetas);
+
+  SpreadsheetApp.flush();
+}
+
+
+function construirFormulaBaseVirtualM5_(row) {
+  return `($H${row}+IFERROR(SUMIFS(Aportes_Metas!$E:$E;Aportes_Metas!$B:$B;$B${row};Aportes_Metas!$D:$D;"Asignación virtual");0)-IFERROR(SUMIFS(Aportes_Metas!$E:$E;Aportes_Metas!$B:$B;$B${row};Aportes_Metas!$D:$D;"Retiro virtual");0)+IFERROR(SUMIFS(Aportes_Metas!$E:$E;Aportes_Metas!$B:$B;$B${row};Aportes_Metas!$D:$D;"Ajuste manual");0))`;
+}
+
+function validarColumnasM5_(shMetas, shAportes, shMovimientos) {
+  const checks = [
+    {
+      sheet: shMetas,
+      expected: [
+        ["ID_Meta", 1],
+        ["Nombre", 2],
+        ["Tipo meta", 3],
+        ["Categoría relacionada", 4],
+        ["Cuenta referencia", 5],
+        ["Deuda relacionada", 6],
+        ["Monto objetivo", 7],
+        ["Saldo inicial / asignado", 8],
+        ["Saldo calculado", 9],
+        ["Aporte mensual sugerido", 10],
+        ["Fecha objetivo", 11],
+        ["Prioridad", 12],
+        ["Estado", 13]
+      ]
+    },
+    {
+      sheet: shAportes,
+      expected: [
+        ["Fecha", 1],
+        ["Meta", 2],
+        ["Cuenta referencia", 3],
+        ["Tipo movimiento meta", 4],
+        ["Monto", 5]
+      ]
+    },
+    {
+      sheet: shMovimientos,
+      expected: [
+        ["COP", 6],
+        ["Categoría", 12],
+        ["Naturaleza", 13],
+        ["Meta", 15]
+      ]
+    }
+  ];
+
+  checks.forEach(group => {
+    group.expected.forEach(item => {
+      const header = item[0];
+      const expectedCol = item[1];
+      const realCol = buscarColumnaPorEncabezadoMetas_(group.sheet, header);
+
+      if (realCol !== expectedCol) {
+        throw new Error(
+          "M5 detenido. En hoja " +
+          group.sheet.getName() +
+          ", la columna '" +
+          header +
+          "' debería estar en posición " +
+          expectedCol +
+          ", pero está en " +
+          realCol +
+          ". Revisa antes de aplicar fórmulas."
+        );
+      }
+    });
+  });
+}
+
+
+function aplicarFormatoMetasM5_(sheet) {
+  sheet.setColumnWidth(14, 120);
+  sheet.setColumnWidth(15, 180);
+  sheet.setColumnWidth(16, 160);
+
+  sheet.getRange("G:J").setNumberFormat("$#,##0");
+  sheet.getRange("N:N").setNumberFormat("0%");
+  sheet.getRange("O:P").setNumberFormat("@");
+
+  sheet.getRange("A:P").setVerticalAlignment("middle");
+
+  const filter = sheet.getFilter();
+
+  if (filter) {
+    filter.remove();
+  }
+
+  sheet.getRange("A1:P1").createFilter();
+}
+
+
+function verificarMetas_M5_Calculos() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shMetas = ss.getSheetByName("Metas");
+
+  if (!shMetas) {
+    Logger.log("La hoja Metas NO existe.");
+    return;
+  }
+
+  Logger.log("Hoja Metas: OK");
+  Logger.log("Saldo calculado I2: " + (shMetas.getRange("I2").getFormula() ? "OK" : "SIN FÓRMULA"));
+  Logger.log("Aporte mensual sugerido J2: " + (shMetas.getRange("J2").getFormula() ? "OK" : "SIN FÓRMULA"));
+  Logger.log("Avance % N2: " + (shMetas.getRange("N2").getFormula() ? "OK" : "SIN FÓRMULA"));
+  Logger.log("Disponible / avance O2: " + (shMetas.getRange("O2").getFormula() ? "OK" : "SIN FÓRMULA"));
+  Logger.log("Estado avance P2: " + (shMetas.getRange("P2").getFormula() ? "OK" : "SIN FÓRMULA"));
+}
+
+/***************************************
+ * M6 — DASHBOARD_DATA: BLOQUE METAS
+ ***************************************/
+
+function setupMetas_M6_DashboardData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shDashboardData = ss.getSheetByName("Dashboard_Data");
+  const shMetas = ss.getSheetByName("Metas");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shDashboardData || !shMetas || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Dashboard_Data, Metas o Movimientos.");
+  }
+
+  const metasCols = obtenerColumnasMetasM6_(shMetas, {
+    nombre: "Nombre",
+    tipo: "Tipo meta",
+    saldo: "Saldo calculado",
+    prioridad: "Prioridad",
+    estado: "Estado",
+    avance: "Avance %",
+    estadoAvance: "Estado avance"
+  });
+
+  const movCols = obtenerColumnasMetasM6_(shMovimientos, {
+    cop: "COP",
+    naturaleza: "Naturaleza",
+    meta: "Meta"
+  });
+
+  const startRow = obtenerFilaBloqueMetasDashboardData_(shDashboardData);
+
+  const rows = [
+    ["METAS Y BOLSILLOS", ""],
+    ["Metas activas", `=COUNTIF(Metas!$${metasCols.estado}:$${metasCols.estado};"Activa")`],
+    ["Metas de consumo activas", `=COUNTIFS(Metas!$${metasCols.tipo}:$${metasCols.tipo};"Consumo";Metas!$${metasCols.estado}:$${metasCols.estado};"Activa")`],
+    ["Metas patrimoniales activas", `=SUM(COUNTIFS(Metas!$${metasCols.tipo}:$${metasCols.tipo};"Patrimonio";Metas!$${metasCols.estado}:$${metasCols.estado};"Activa");COUNTIFS(Metas!$${metasCols.tipo}:$${metasCols.tipo};"Ahorro";Metas!$${metasCols.estado}:$${metasCols.estado};"Activa");COUNTIFS(Metas!$${metasCols.tipo}:$${metasCols.tipo};"Inversión";Metas!$${metasCols.estado}:$${metasCols.estado};"Activa");COUNTIFS(Metas!$${metasCols.tipo}:$${metasCols.tipo};"Libertad financiera";Metas!$${metasCols.estado}:$${metasCols.estado};"Activa"))`],
+    ["Metas de deuda activas", `=COUNTIFS(Metas!$${metasCols.tipo}:$${metasCols.tipo};"Deuda";Metas!$${metasCols.estado}:$${metasCols.estado};"Activa")`],
+    ["Total asignado a metas", `=IFERROR(SUMIFS(Metas!$${metasCols.saldo}:$${metasCols.saldo};Metas!$${metasCols.estado}:$${metasCols.estado};"Activa");0)`],
+    ["Total disponible en metas de consumo", `=IFERROR(SUMIFS(Metas!$${metasCols.saldo}:$${metasCols.saldo};Metas!$${metasCols.tipo}:$${metasCols.tipo};"Consumo";Metas!$${metasCols.estado}:$${metasCols.estado};"Activa");0)`],
+    ["Total usado en metas", `=IFERROR(SUMIFS(Movimientos!$${movCols.cop}:$${movCols.cop};Movimientos!$${movCols.meta}:$${movCols.meta};"<>";Movimientos!$${movCols.naturaleza}:$${movCols.naturaleza};"Egreso");0)+IFERROR(SUMIFS(Movimientos!$${movCols.cop}:$${movCols.cop};Movimientos!$${movCols.meta}:$${movCols.meta};"<>";Movimientos!$${movCols.naturaleza}:$${movCols.naturaleza};"Transferencia");0)`],
+    ["Avance promedio metas activas", `=IFERROR(AVERAGEIF(Metas!$${metasCols.estado}:$${metasCols.estado};"Activa";Metas!$${metasCols.avance}:$${metasCols.avance});0)`],
+    ["Meta con menor avance", `=IFERROR(INDEX(SORT(FILTER({Metas!$${metasCols.nombre}:$${metasCols.nombre}\\Metas!$${metasCols.avance}:$${metasCols.avance}};Metas!$${metasCols.estado}:$${metasCols.estado}="Activa";Metas!$${metasCols.nombre}:$${metasCols.nombre}<>"");2;TRUE);1;1);"")`],
+    ["Meta prioritaria", `=IFERROR(INDEX(FILTER(Metas!$${metasCols.nombre}:$${metasCols.nombre};Metas!$${metasCols.estado}:$${metasCols.estado}="Activa";Metas!$${metasCols.prioridad}:$${metasCols.prioridad}="Alta");1);"")`]
+  ];
+
+  shDashboardData.getRange(startRow, 1, rows.length, 2).setValues(rows);
+
+  shDashboardData.getRange(startRow, 1, 1, 2)
+    .setFontWeight("bold")
+    .setBackground("#f3f4f6");
+
+  shDashboardData.getRange(startRow + 1, 1, rows.length - 1, 1)
+    .setFontWeight("bold");
+
+  shDashboardData.getRange(startRow + 5, 2, 3, 1)
+    .setNumberFormat("$#,##0");
+
+  shDashboardData.getRange(startRow + 8, 2, 1, 1)
+    .setNumberFormat("0%");
+
+  shDashboardData.autoResizeColumns(1, 2);
+
+  SpreadsheetApp.flush();
+
+  Logger.log("Bloque METAS Y BOLSILLOS creado/actualizado en Dashboard_Data desde fila " + startRow);
+}
+
+
+function obtenerFilaBloqueMetasDashboardData_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 1);
+
+  if (lastRow >= 1) {
+    const values = sheet.getRange(1, 1, lastRow, 1).getValues().flat();
+
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i]).trim().toUpperCase() === "METAS Y BOLSILLOS") {
+        return i + 1;
+      }
+    }
+  }
+
+  return lastRow + 3;
+}
+
+
+function obtenerColumnasMetasM6_(sheet, config) {
+  const result = {};
+
+  Object.keys(config).forEach(key => {
+    const header = config[key];
+    const col = buscarColumnaPorEncabezadoMetas_(sheet, header);
+
+    if (!col) {
+      throw new Error("No se encontró la columna '" + header + "' en la hoja " + sheet.getName());
+    }
+
+    result[key] = columnNumberToLetterMetas_(col);
+  });
+
+  return result;
+}
+
+
+function columnNumberToLetterMetas_(columnNumber) {
+  let letter = "";
+  let temp = columnNumber;
+
+  while (temp > 0) {
+    const remainder = (temp - 1) % 26;
+    letter = String.fromCharCode(65 + remainder) + letter;
+    temp = Math.floor((temp - remainder - 1) / 26);
+  }
+
+  return letter;
+}
+
+
+function verificarMetas_M6_DashboardData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shDashboardData = ss.getSheetByName("Dashboard_Data");
+
+  if (!shDashboardData) {
+    Logger.log("Dashboard_Data NO existe.");
+    return;
+  }
+
+  const startRow = obtenerFilaBloqueMetasDashboardData_(shDashboardData);
+
+  Logger.log("Bloque METAS Y BOLSILLOS encontrado en fila: " + startRow);
+  Logger.log("Título: " + shDashboardData.getRange(startRow, 1).getValue());
+  Logger.log("Metas activas: " + shDashboardData.getRange(startRow + 1, 2).getValue());
+  Logger.log("Total asignado a metas: " + shDashboardData.getRange(startRow + 5, 2).getValue());
+  Logger.log("Avance promedio: " + shDashboardData.getRange(startRow + 8, 2).getValue());
+}
+/***************************************
+ * M7 — DASHBOARD VISUAL: BLOQUE METAS
+ ***************************************/
+
+function setupMetas_M7_DashboardVisual() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shDashboard = ss.getSheetByName("Dashboard");
+  const shMetas = ss.getSheetByName("Metas");
+
+  if (!shDashboard || !shMetas) {
+    throw new Error("Faltan hojas requeridas: Dashboard o Metas.");
+  }
+
+  const startRow = obtenerFilaBloqueMetasDashboardVisual_(shDashboard);
+
+  const rows = [
+    ["Metas y bolsillos", "", "", "", ""],
+    ["Meta", "Tipo", "Objetivo", "Disponible / Avance", "Estado"],
+    [
+      `=IFERROR(INDEX(FILTER(Metas!$B$2:$B;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");1);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$C$2:$C;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");1);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$G$2:$G;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");1);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$O$2:$O;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");1);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$P$2:$P;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");1);"")`
+    ],
+    [
+      `=IFERROR(INDEX(FILTER(Metas!$B$2:$B;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");2);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$C$2:$C;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");2);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$G$2:$G;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");2);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$O$2:$O;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");2);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$P$2:$P;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");2);"")`
+    ],
+    [
+      `=IFERROR(INDEX(FILTER(Metas!$B$2:$B;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");3);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$C$2:$C;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");3);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$G$2:$G;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");3);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$O$2:$O;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");3);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$P$2:$P;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");3);"")`
+    ],
+    [
+      `=IFERROR(INDEX(FILTER(Metas!$B$2:$B;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");4);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$C$2:$C;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");4);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$G$2:$G;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");4);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$O$2:$O;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");4);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$P$2:$P;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");4);"")`
+    ],
+    [
+      `=IFERROR(INDEX(FILTER(Metas!$B$2:$B;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");5);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$C$2:$C;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");5);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$G$2:$G;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");5);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$O$2:$O;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");5);"")`,
+      `=IFERROR(INDEX(FILTER(Metas!$P$2:$P;Metas!$M$2:$M="Activa";Metas!$B$2:$B<>"");5);"")`
+    ]
+  ];
+
+  shDashboard.getRange(startRow, 1, rows.length, 5).setValues(rows);
+
+  shDashboard.getRange(startRow, 1, 1, 5)
+    .merge()
+    .setFontWeight("bold")
+    .setFontSize(14)
+    .setBackground("#f3f4f6");
+
+  shDashboard.getRange(startRow + 1, 1, 1, 5)
+    .setFontWeight("bold")
+    .setBackground("#f9fafb");
+
+  shDashboard.getRange(startRow + 2, 3, 5, 1)
+    .setNumberFormat("$#,##0");
+
+  shDashboard.getRange(startRow, 1, rows.length, 5)
+    .setVerticalAlignment("middle")
+    .setBorder(true, true, true, true, true, true);
+
+  shDashboard.setColumnWidth(1, 180);
+  shDashboard.setColumnWidth(2, 140);
+  shDashboard.setColumnWidth(3, 130);
+  shDashboard.setColumnWidth(4, 190);
+  shDashboard.setColumnWidth(5, 150);
+
+  SpreadsheetApp.flush();
+
+  Logger.log("Bloque Metas y bolsillos creado/actualizado en Dashboard desde fila " + startRow);
+}
+
+
+function obtenerFilaBloqueMetasDashboardVisual_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 1);
+
+  if (lastRow >= 1) {
+    const values = sheet.getRange(1, 1, lastRow, 1).getValues().flat();
+
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i]).trim().toLowerCase() === "metas y bolsillos") {
+        return i + 1;
+      }
+    }
+  }
+
+  return lastRow + 3;
+}
+
+
+function verificarMetas_M7_DashboardVisual() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shDashboard = ss.getSheetByName("Dashboard");
+
+  if (!shDashboard) {
+    Logger.log("Dashboard NO existe.");
+    return;
+  }
+
+  const startRow = obtenerFilaBloqueMetasDashboardVisual_(shDashboard);
+
+  Logger.log("Bloque Metas y bolsillos encontrado en fila: " + startRow);
+  Logger.log("Título: " + shDashboard.getRange(startRow, 1).getValue());
+  Logger.log("Primer meta visible: " + shDashboard.getRange(startRow + 2, 1).getValue());
+  Logger.log("Primer objetivo visible: " + shDashboard.getRange(startRow + 2, 3).getValue());
+  Logger.log("Primer estado visible: " + shDashboard.getRange(startRow + 2, 5).getValue());
+}
+/***************************************
+ * M8 — PRUEBAS INTEGRALES DE METAS
+ ***************************************/
+
+function setupMetas_M8_PruebasIntegrales() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shMetas = ss.getSheetByName("Metas");
+  const shAportes = ss.getSheetByName("Aportes_Metas");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shMetas || !shAportes || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Metas, Aportes_Metas o Movimientos.");
+  }
+
+  limpiarMetas_M8_PruebasIntegrales();
+
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  crearMetaM8_({
+    id: "M8_TEST_META_001",
+    nombre: "M8_TEST Conciertos",
+    tipo: "Consumo",
+    categoria: "Consumo Libre",
+    montoObjetivo: 200000,
+    saldoInicial: 0,
+    fechaObjetivo: new Date(2026, 11, 31),
+    prioridad: "Media",
+    estado: "Activa"
+  });
+
+  crearMetaM8_({
+    id: "M8_TEST_META_002",
+    nombre: "M8_TEST Fondo emergencia",
+    tipo: "Patrimonio",
+    categoria: "Patrimonio",
+    montoObjetivo: 1000000,
+    saldoInicial: 100000,
+    fechaObjetivo: new Date(2026, 11, 31),
+    prioridad: "Alta",
+    estado: "Activa"
+  });
+
+  crearMetaM8_({
+    id: "M8_TEST_META_003",
+    nombre: "M8_TEST Pagar deuda",
+    tipo: "Deuda",
+    categoria: "Patrimonio",
+    montoObjetivo: 500000,
+    saldoInicial: 0,
+    fechaObjetivo: new Date(2026, 11, 31),
+    prioridad: "Alta",
+    estado: "Activa"
+  });
+
+  SpreadsheetApp.flush();
+
+  // Refresca validaciones para que Aportes_Metas, Presupuesto y Movimientos
+  // acepten las nuevas metas M8_TEST recién creadas.
+  if (typeof setupMetas_M3_HojaAportesMetas === "function") {
+    setupMetas_M3_HojaAportesMetas();
+  }
+
+  if (typeof setupMetas_M4A_ColumnasMeta === "function") {
+    setupMetas_M4A_ColumnasMeta();
+  }
+
+  SpreadsheetApp.flush();
+
+  crearAporteMetaM8_({
+    fecha: hoy,
+    meta: "M8_TEST Conciertos",
+    tipoMovimiento: "Asignación virtual",
+    monto: 200000
+  });
+
+  crearAporteMetaM8_({
+    fecha: hoy,
+    meta: "M8_TEST Conciertos",
+    tipoMovimiento: "Retiro virtual",
+    monto: 80000
+  });
+
+  crearAporteMetaM8_({
+    fecha: hoy,
+    meta: "M8_TEST Fondo emergencia",
+    tipoMovimiento: "Asignación virtual",
+    monto: 200000
+  });
+
+  crearMovimientoPruebaM8_({
+    fecha: hoy,
+    concepto: "M8_TEST Gasto concierto",
+    monto: 50000,
+    cop: 50000,
+    categoria: "Consumo Libre",
+    naturaleza: "Egreso",
+    etiqueta: "",
+    meta: "M8_TEST Conciertos",
+    origenEjecucion: "Prueba técnica metas M8",
+    refPresupuesto: "M8_TEST"
+  });
+
+  crearMovimientoPruebaM8_({
+    fecha: hoy,
+    concepto: "M8_TEST Aporte fondo emergencia",
+    monto: 100000,
+    cop: 100000,
+    categoria: "Patrimonio",
+    naturaleza: "Transferencia",
+    etiqueta: "Ahorro",
+    meta: "M8_TEST Fondo emergencia",
+    origenEjecucion: "Prueba técnica metas M8",
+    refPresupuesto: "M8_TEST"
+  });
+
+  crearMovimientoPruebaM8_({
+    fecha: hoy,
+    concepto: "M8_TEST Abono deuda",
+    monto: 150000,
+    cop: 150000,
+    categoria: "Patrimonio",
+    naturaleza: "Transferencia",
+    etiqueta: "Abono extra a deuda",
+    meta: "M8_TEST Pagar deuda",
+    origenEjecucion: "Prueba técnica metas M8",
+    refPresupuesto: "M8_TEST"
+  });
+
+  if (typeof setupMetas_M5_Calculos === "function") {
+    setupMetas_M5_Calculos();
+  }
+
+  if (typeof setupMetas_M6_DashboardData === "function") {
+    setupMetas_M6_DashboardData();
+  }
+
+  if (typeof setupMetas_M7_DashboardVisual === "function") {
+    setupMetas_M7_DashboardVisual();
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log("M8 listo. Se crearon metas, aportes y movimientos de prueba con prefijo M8_TEST.");
+}
+
+function crearMetaM8_(data) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shMetas = ss.getSheetByName("Metas");
+
+  const row = obtenerPrimeraFilaVaciaPorHeaderM8_(shMetas, "Nombre");
+
+  escribirValorPorHeaderM8_(shMetas, row, "ID_Meta", data.id);
+  escribirValorPorHeaderM8_(shMetas, row, "Nombre", data.nombre);
+  escribirValorPorHeaderM8_(shMetas, row, "Tipo meta", data.tipo);
+  escribirValorPorHeaderM8_(shMetas, row, "Categoría relacionada", data.categoria);
+  escribirValorPorHeaderM8_(shMetas, row, "Monto objetivo", data.montoObjetivo);
+  escribirValorPorHeaderM8_(shMetas, row, "Saldo inicial / asignado", data.saldoInicial);
+  escribirValorPorHeaderM8_(shMetas, row, "Fecha objetivo", data.fechaObjetivo);
+  escribirValorPorHeaderM8_(shMetas, row, "Prioridad", data.prioridad);
+  escribirValorPorHeaderM8_(shMetas, row, "Estado", data.estado);
+}
+
+
+function crearAporteMetaM8_(data) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shAportes = ss.getSheetByName("Aportes_Metas");
+
+  const row = obtenerPrimeraFilaVaciaPorHeaderM8_(shAportes, "Meta");
+
+  escribirValorPorHeaderM8_(shAportes, row, "Fecha", data.fecha);
+  escribirValorPorHeaderM8_(shAportes, row, "Meta", data.meta);
+  escribirValorPorHeaderM8_(shAportes, row, "Tipo movimiento meta", data.tipoMovimiento);
+  escribirValorPorHeaderM8_(shAportes, row, "Monto", data.monto);
+}
+
+
+function crearMovimientoPruebaM8_(data) {
+  if (typeof crearMovimientoDesdeObjetoMetas_ === "function") {
+    crearMovimientoDesdeObjetoMetas_({
+      fecha: data.fecha,
+      concepto: data.concepto,
+      monto: data.monto,
+      moneda: "COP",
+      cop: data.cop,
+      metodoPago: "",
+      tipoMetodo: "",
+      destino: "",
+      destinoTC: "",
+      destinoDeuda: "",
+      categoria: data.categoria,
+      naturaleza: data.naturaleza,
+      etiqueta: data.etiqueta,
+      meta: data.meta,
+      origenEjecucion: data.origenEjecucion,
+      refPresupuesto: data.refPresupuesto
+    });
+
+    return;
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  const row = obtenerPrimeraFilaVaciaPorHeaderM8_(shMovimientos, "Concepto");
+
+  escribirValorPorHeaderM8_(shMovimientos, row, "ID_Movimiento", generarIdMovimientoM8_());
+  escribirValorPorHeaderM8_(shMovimientos, row, "Fecha", data.fecha);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Concepto", data.concepto);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Monto", data.monto);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Moneda", "COP");
+  escribirValorPorHeaderM8_(shMovimientos, row, "COP", data.cop);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Categoría", data.categoria);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Naturaleza", data.naturaleza);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Etiqueta", data.etiqueta);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Meta", data.meta);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Origen ejecución", data.origenEjecucion);
+  escribirValorPorHeaderM8_(shMovimientos, row, "Ref_Presupuesto", data.refPresupuesto);
+}
+
+
+function verificarMetas_M8_PruebasIntegrales() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shMetas = ss.getSheetByName("Metas");
+
+  if (!shMetas) {
+    Logger.log("No existe la hoja Metas.");
+    return;
+  }
+
+  const casos = [
+    {
+      meta: "M8_TEST Conciertos",
+      esperadoSaldo: 70000,
+      esperadoAvance: 0.35
+    },
+    {
+      meta: "M8_TEST Fondo emergencia",
+      esperadoSaldo: 400000,
+      esperadoAvance: 0.40
+    },
+    {
+      meta: "M8_TEST Pagar deuda",
+      esperadoSaldo: 150000,
+      esperadoAvance: 0.30
+    }
+  ];
+
+  Logger.log("===== VERIFICACIÓN M8 =====");
+
+  casos.forEach(caso => {
+    const row = buscarFilaPorValorHeaderM8_(shMetas, "Nombre", caso.meta);
+
+    if (!row) {
+      Logger.log(caso.meta + ": NO ENCONTRADA");
+      return;
+    }
+
+    const saldo = Number(leerValorPorHeaderM8_(shMetas, row, "Saldo calculado"));
+    const avance = Number(leerValorPorHeaderM8_(shMetas, row, "Avance %"));
+    const disponibleAvance = leerValorPorHeaderM8_(shMetas, row, "Disponible / avance");
+    const estadoAvance = leerValorPorHeaderM8_(shMetas, row, "Estado avance");
+
+    const saldoOk = Math.round(saldo) === caso.esperadoSaldo;
+    const avanceOk = Math.abs(avance - caso.esperadoAvance) < 0.001;
+
+    Logger.log(caso.meta);
+    Logger.log("Saldo calculado: " + saldo + " | Esperado: " + caso.esperadoSaldo + " | " + (saldoOk ? "OK" : "REVISAR"));
+    Logger.log("Avance: " + avance + " | Esperado: " + caso.esperadoAvance + " | " + (avanceOk ? "OK" : "REVISAR"));
+    Logger.log("Disponible / avance: " + disponibleAvance);
+    Logger.log("Estado avance: " + estadoAvance);
+    Logger.log("---------------------------");
+  });
+
+  Logger.log("Si los 3 casos salen OK, M8 queda validado.");
+}
+
+
+function limpiarMetas_M8_PruebasIntegrales() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shMetas = ss.getSheetByName("Metas");
+  const shAportes = ss.getSheetByName("Aportes_Metas");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (shMovimientos) {
+    eliminarFilasPorPrefijoHeaderM8_(shMovimientos, "Concepto", "M8_TEST");
+  }
+
+  if (shAportes) {
+    eliminarFilasPorPrefijoHeaderM8_(shAportes, "Meta", "M8_TEST");
+  }
+
+  if (shMetas) {
+    eliminarFilasPorPrefijoHeaderM8_(shMetas, "Nombre", "M8_TEST");
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log("Datos de prueba M8 eliminados.");
+}
+
+
+function eliminarFilasPorPrefijoHeaderM8_(sheet, headerName, prefix) {
+  const col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col) {
+    Logger.log("No se encontró la columna " + headerName + " en " + sheet.getName());
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return;
+
+  const values = sheet.getRange(2, col, lastRow - 1, 1).getValues().flat();
+
+  for (let i = values.length - 1; i >= 0; i--) {
+    const value = String(values[i] || "").trim();
+
+    if (value.indexOf(prefix) === 0) {
+      sheet.deleteRow(i + 2);
+    }
+  }
+}
+
+
+function obtenerPrimeraFilaVaciaPorHeaderM8_(sheet, headerName) {
+  const col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col) {
+    throw new Error("No se encontró la columna " + headerName + " en " + sheet.getName());
+  }
+
+  const startRow = 2;
+  const maxRows = sheet.getMaxRows();
+  const values = sheet.getRange(startRow, col, maxRows - 1, 1).getValues().flat();
+
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i] || "").trim() === "") {
+      return startRow + i;
+    }
+  }
+
+  sheet.insertRowsAfter(maxRows, 1);
+  return maxRows + 1;
+}
+
+
+function buscarFilaPorValorHeaderM8_(sheet, headerName, valueToFind) {
+  const col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col) {
+    throw new Error("No se encontró la columna " + headerName + " en " + sheet.getName());
+  }
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return null;
+
+  const values = sheet.getRange(2, col, lastRow - 1, 1).getValues().flat();
+
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i] || "").trim() === String(valueToFind).trim()) {
+      return i + 2;
+    }
+  }
+
+  return null;
+}
+
+
+function escribirValorPorHeaderM8_(sheet, rowNumber, headerName, value) {
+  const col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col) {
+    throw new Error("No se encontró la columna " + headerName + " en " + sheet.getName());
+  }
+
+  sheet.getRange(rowNumber, col).setValue(value);
+}
+
+
+function leerValorPorHeaderM8_(sheet, rowNumber, headerName) {
+  const col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col) {
+    throw new Error("No se encontró la columna " + headerName + " en " + sheet.getName());
+  }
+
+  return sheet.getRange(rowNumber, col).getValue();
+}
+
+
+function generarIdMovimientoM8_() {
+  const now = new Date();
+
+  return "M8_TEST_MOV-" +
+    Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd-HHmmss") +
+    "-" +
+    Math.floor(Math.random() * 10000);
+}
+function obtenerPrimeraFilaVaciaMovimientoMetas_(sheet) {
+  const conceptoCol = buscarColumnaPorEncabezadoMetas_(sheet, 'Concepto');
+
+  if (!conceptoCol) {
+    throw new Error('No se encontró la columna Concepto en Movimientos.');
+  }
+
+  const startRow = 2;
+  const maxRows = sheet.getMaxRows();
+  const numRows = maxRows - 1;
+
+  const conceptos = sheet
+    .getRange(startRow, conceptoCol, numRows, 1)
+    .getValues()
+    .flat();
+
+  for (let i = 0; i < conceptos.length; i++) {
+    if (String(conceptos[i] || '').trim() === '') {
+      return startRow + i;
+    }
+  }
+
+  sheet.insertRowsAfter(maxRows, 1);
+  return maxRows + 1;
+}
+/***************************************
+ * M9 — REGLA DE USO Y UX DE METAS
+ ***************************************/
+
+function setupMetas_M9_ReglaUsoMetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shMetas = ss.getSheetByName("Metas");
+  const shAportes = ss.getSheetByName("Aportes_Metas");
+  const shDashboardData = ss.getSheetByName("Dashboard_Data");
+  const shDashboard = ss.getSheetByName("Dashboard");
+
+  if (!shMetas || !shAportes) {
+    throw new Error("Faltan hojas requeridas: Metas o Aportes_Metas.");
+  }
+
+  const saldoInicialCol = buscarColumnaPorEncabezadoMetas_(shMetas, "Saldo inicial");
+
+  if (!saldoInicialCol) {
+    throw new Error("No se encontró la columna Saldo inicial / asignado o Saldo inicial en Metas.");
+  }
+
+  shMetas.getRange(1, saldoInicialCol).setValue("Saldo inicial");
+
+  aplicarNotasUXMetas_M9_(shMetas, shAportes);
+
+  if (typeof setupMetas_M5_Calculos === "function") {
+    setupMetas_M5_Calculos();
+  }
+
+  if (typeof setupMetas_M6_DashboardData === "function" && shDashboardData) {
+    setupMetas_M6_DashboardData();
+  }
+
+  if (typeof setupMetas_M7_DashboardVisual === "function" && shDashboard) {
+    setupMetas_M7_DashboardVisual();
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log("M9 listo. Columna renombrada a Saldo inicial y reglas UX aplicadas.");
+}
+
+
+function aplicarNotasUXMetas_M9_(shMetas, shAportes) {
+  const colSaldoInicial = buscarColumnaPorEncabezadoMetas_(shMetas, "Saldo inicial");
+  const colSaldoCalculado = buscarColumnaPorEncabezadoMetas_(shMetas, "Saldo calculado");
+  const colAporteSugerido = buscarColumnaPorEncabezadoMetas_(shMetas, "Aporte mensual sugerido");
+  const colAvance = buscarColumnaPorEncabezadoMetas_(shMetas, "Avance %");
+  const colDisponible = buscarColumnaPorEncabezadoMetas_(shMetas, "Disponible / avance");
+  const colEstadoAvance = buscarColumnaPorEncabezadoMetas_(shMetas, "Estado avance");
+
+  if (colSaldoInicial) {
+    shMetas.getRange(1, colSaldoInicial).setNote(
+      "Usa esta columna solo para dinero que ya estaba reservado antes de empezar a usar el módulo de metas. Los nuevos aportes deben registrarse en Aportes_Metas."
+    );
+  }
+
+  if (colSaldoCalculado) {
+    shMetas.getRange(1, colSaldoCalculado).setNote(
+      "Se calcula automáticamente con Saldo inicial + asignaciones virtuales - retiros virtuales + movimientos reales asociados a la meta."
+    );
+  }
+
+  if (colAporteSugerido) {
+    shMetas.getRange(1, colAporteSugerido).setNote(
+      "Calcula cuánto deberías aportar mensualmente para llegar al objetivo según la fecha objetivo."
+    );
+  }
+
+  if (colAvance) {
+    shMetas.getRange(1, colAvance).setNote(
+      "Porcentaje de avance de la meta: Saldo calculado / Monto objetivo."
+    );
+  }
+
+  if (colDisponible) {
+    shMetas.getRange(1, colDisponible).setNote(
+      "Para metas de consumo muestra dinero disponible. Para otras metas muestra porcentaje de avance."
+    );
+  }
+
+  if (colEstadoAvance) {
+    shMetas.getRange(1, colEstadoAvance).setNote(
+      "Estado automático según avance, fecha objetivo y estado de la meta."
+    );
+  }
+
+  const colTipoMovimiento = buscarColumnaPorEncabezadoMetas_(shAportes, "Tipo movimiento meta");
+  const colMonto = buscarColumnaPorEncabezadoMetas_(shAportes, "Monto");
+
+  if (colTipoMovimiento) {
+    shAportes.getRange(1, colTipoMovimiento).setNote(
+      "Asignación virtual: reserva dinero para una meta. Retiro virtual: libera dinero reservado. Ajuste manual: corrige el saldo virtual de una meta."
+    );
+  }
+
+  if (colMonto) {
+    shAportes.getRange(1, colMonto).setNote(
+      "Este monto no mueve dinero real entre cuentas. Solo afecta el bolsillo virtual de la meta."
+    );
+  }
+
+  shMetas.getRange(1, 1, 1, shMetas.getLastColumn())
+    .setFontWeight("bold")
+    .setBackground("#f3f4f6");
+
+  shAportes.getRange(1, 1, 1, shAportes.getLastColumn())
+    .setFontWeight("bold")
+    .setBackground("#f3f4f6");
+}
+
+
+function verificarMetas_M9_ReglaUsoMetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shMetas = ss.getSheetByName("Metas");
+  const shAportes = ss.getSheetByName("Aportes_Metas");
+
+  if (!shMetas || !shAportes) {
+    Logger.log("Faltan hojas requeridas: Metas o Aportes_Metas.");
+    return;
+  }
+
+  const colSaldoInicial = buscarColumnaPorEncabezadoMetas_(shMetas, "Saldo inicial");
+  const headerSaldoInicial = colSaldoInicial ? shMetas.getRange(1, colSaldoInicial).getValue() : "NO ENCONTRADO";
+
+  Logger.log("Columna Saldo inicial: " + headerSaldoInicial);
+  Logger.log("Nota Saldo inicial: " + (colSaldoInicial && shMetas.getRange(1, colSaldoInicial).getNote() ? "OK" : "SIN NOTA"));
+
+  const colTipoMovimiento = buscarColumnaPorEncabezadoMetas_(shAportes, "Tipo movimiento meta");
+  Logger.log("Nota Tipo movimiento meta: " + (colTipoMovimiento && shAportes.getRange(1, colTipoMovimiento).getNote() ? "OK" : "SIN NOTA"));
+
+  const colMonto = buscarColumnaPorEncabezadoMetas_(shAportes, "Monto");
+  Logger.log("Nota Monto Aportes_Metas: " + (colMonto && shAportes.getRange(1, colMonto).getNote() ? "OK" : "SIN NOTA"));
+
+  Logger.log("M9 verificado.");
+}
+/***************************************
+ * M10 — CREAR PRESUPUESTO DESDE METAS
+ * Flujo:
+ * Metas → Presupuesto tipo Recordatorio
+ ***************************************/
+
+function setupMetas_M10_PresupuestoDesdeMetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shMetas = ss.getSheetByName("Metas");
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+
+  if (!shMetas || !shPresupuesto) {
+    throw new Error("Faltan hojas requeridas: Metas o Presupuesto.");
+  }
+
+  prepararCatalogosM10_(ss);
+
+  const DIA_PAGO_META_DEFAULT = 1;
+
+  const metasLastRow = shMetas.getLastRow();
+  const metasLastCol = shMetas.getLastColumn();
+
+  if (metasLastRow < 2) {
+    Logger.log("No hay metas para procesar.");
+    return;
+  }
+
+  const metasHeaders = shMetas.getRange(1, 1, 1, metasLastCol).getValues()[0];
+  const metasMap = crearHeaderMapM10_(metasHeaders);
+  const metasData = shMetas.getRange(2, 1, metasLastRow - 1, metasLastCol).getValues();
+
+  let creadas = 0;
+  let actualizadas = 0;
+  let omitidas = 0;
+
+  metasData.forEach((row, index) => {
+    const filaMeta = index + 2;
+
+    const nombreMeta = String(leerCampoM10_(row, metasMap, ["Nombre"]) || "").trim();
+    const tipoMeta = String(leerCampoM10_(row, metasMap, ["Tipo meta"]) || "").trim();
+    const categoriaRelacionada = String(leerCampoM10_(row, metasMap, ["Categoría relacionada", "Categoria relacionada"]) || "").trim();
+    const cuentaReferencia = String(leerCampoM10_(row, metasMap, ["Cuenta referencia"]) || "").trim();
+    const deudaRelacionada = String(leerCampoM10_(row, metasMap, ["Deuda relacionada"]) || "").trim();
+    const aporteMensual = Number(leerCampoM10_(row, metasMap, ["Aporte mensual sugerido"]) || 0);
+    const estado = String(leerCampoM10_(row, metasMap, ["Estado"]) || "").trim();
+
+    if (!nombreMeta || estado !== "Activa" || !aporteMensual || aporteMensual <= 0) {
+      omitidas++;
+      return;
+    }
+
+    const concepto = "Aporte meta: " + nombreMeta;
+    const filaPresupuestoExistente = buscarFilaPresupuestoPorMetaM10_(shPresupuesto, nombreMeta);
+
+    const filaPresupuesto = filaPresupuestoExistente || obtenerPrimeraFilaVaciaPorHeaderM10_(shPresupuesto, "Concepto");
+
+    const config = obtenerConfigPresupuestoMetaM10_({
+      tipoMeta,
+      categoriaRelacionada,
+      cuentaReferencia,
+      deudaRelacionada
+    });
+
+    limpiarValidacionesFilaPresupuestoM10_(shPresupuesto, filaPresupuesto);
+
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Concepto", concepto);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Monto", aporteMensual);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Día de Pago", DIA_PAGO_META_DEFAULT);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Método de Pago", "");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Destino", config.destino);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Destino_TC", "");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Destino_Deuda", config.destinoDeuda);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Recurrencia", "Mensual");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Moneda", "COP");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "COP", aporteMensual);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Tipo", "Recordatorio");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Categoria", config.categoria);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Naturaleza", config.naturaleza);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Etiqueta", config.etiqueta);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Meta", nombreMeta);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Activo", "Activo");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Versión presupuesto", obtenerValorSeguroCatalogoM10_(ss, "cat_version_presupuesto", "Actual"));
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Origen del registro", "Generado desde meta");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Estado de ejecución", "Pendiente");
+
+    reaplicarValidacionesFilaPresupuestoM10_(shPresupuesto, filaPresupuesto);
+
+    if (filaPresupuestoExistente) {
+      actualizadas++;
+    } else {
+      creadas++;
+    }
+
+    Logger.log("Meta procesada: " + nombreMeta + " → Presupuesto fila " + filaPresupuesto);
+  });
+
+  if (typeof repararValidacionesPresupuestoMovimientos === "function") {
+    repararValidacionesPresupuestoMovimientos();
+  }
+
+  if (typeof setupMetas_M4A_ColumnasMeta === "function") {
+    setupMetas_M4A_ColumnasMeta();
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log("M10 listo.");
+  Logger.log("Presupuestos creados: " + creadas);
+  Logger.log("Presupuestos actualizados: " + actualizadas);
+  Logger.log("Metas omitidas: " + omitidas);
+}
+
+
+function obtenerConfigPresupuestoMetaM10_(data) {
+  const tipo = String(data.tipoMeta || "").trim();
+  const categoriaRelacionada = String(data.categoriaRelacionada || "").trim();
+  const cuentaReferencia = String(data.cuentaReferencia || "").trim();
+  const deudaRelacionada = String(data.deudaRelacionada || "").trim();
+
+  if (tipo === "Consumo") {
+    return {
+      categoria: categoriaRelacionada || "Consumo Libre",
+      naturaleza: "Egreso",
+      etiqueta: "",
+      destino: cuentaReferencia,
+      destinoDeuda: ""
+    };
+  }
+
+  if (tipo === "Deuda") {
+    return {
+      categoria: "Patrimonio",
+      naturaleza: "Transferencia",
+      etiqueta: "Abono extra a deuda",
+      destino: cuentaReferencia,
+      destinoDeuda: deudaRelacionada
+    };
+  }
+
+  if (tipo === "Inversión") {
+    return {
+      categoria: "Patrimonio",
+      naturaleza: "Transferencia",
+      etiqueta: "",
+      destino: cuentaReferencia,
+      destinoDeuda: ""
+    };
+  }
+
+  return {
+    categoria: "Patrimonio",
+    naturaleza: "Transferencia",
+    etiqueta: "",
+    destino: cuentaReferencia,
+    destinoDeuda: ""
+  };
+}
+
+
+function buscarFilaPresupuestoPorMetaM10_(sheet, nombreMeta) {
+  const metaCol = buscarColumnaPorEncabezadoMetas_(sheet, "Meta");
+  const origenCol = buscarColumnaPorEncabezadoMetas_(sheet, "Origen del registro");
+  const conceptoCol = buscarColumnaPorEncabezadoMetas_(sheet, "Concepto");
+
+  if (!metaCol || !conceptoCol) return null;
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return null;
+
+  const metaValues = sheet.getRange(2, metaCol, lastRow - 1, 1).getValues().flat();
+  const conceptoValues = sheet.getRange(2, conceptoCol, lastRow - 1, 1).getValues().flat();
+  const origenValues = origenCol
+    ? sheet.getRange(2, origenCol, lastRow - 1, 1).getValues().flat()
+    : [];
+
+  for (let i = 0; i < metaValues.length; i++) {
+    const meta = String(metaValues[i] || "").trim();
+    const concepto = String(conceptoValues[i] || "").trim();
+    const origen = origenCol ? String(origenValues[i] || "").trim() : "";
+
+    const esMismaMeta = meta === nombreMeta;
+    const esConceptoMeta = concepto === "Aporte meta: " + nombreMeta;
+    const esGeneradoDesdeMeta = origen === "Generado desde meta" || origen === "";
+
+    if ((esMismaMeta || esConceptoMeta) && esGeneradoDesdeMeta) {
+      return i + 2;
+    }
+  }
+
+  return null;
+}
+
+
+function prepararCatalogosM10_(ss) {
+  asegurarValorEnRangoNombradoM10_(ss, "cat_tipo_presupuesto", "Recordatorio");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_estado", "Activo");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_recurrencia", "Mensual");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_monedas", "COP");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_origen_registro", "Generado desde meta");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_estado_ejecucion", "Pendiente");
+}
+
+
+function asegurarValorEnRangoNombradoM10_(ss, rangeName, value) {
+  const namedRange = ss.getNamedRanges().find(item => item.getName() === rangeName);
+
+  if (!namedRange) {
+    Logger.log("No existe el rango con nombre: " + rangeName);
+    return;
+  }
+
+  const range = namedRange.getRange();
+  const sheet = range.getSheet();
+  const values = range.getValues().flat().map(item => String(item || "").trim());
+
+  if (values.includes(value)) return;
+
+  const startRow = range.getRow();
+  const col = range.getColumn();
+  const numRows = range.getNumRows();
+
+  for (let i = 0; i < numRows; i++) {
+    if (String(values[i] || "").trim() === "") {
+      sheet.getRange(startRow + i, col).setValue(value);
+      return;
+    }
+  }
+
+  const newRow = startRow + numRows;
+  sheet.insertRowsBefore(newRow, 1);
+  sheet.getRange(newRow, col).setValue(value);
+
+  const newRange = sheet.getRange(startRow, col, numRows + 1, 1);
+  ss.setNamedRange(rangeName, newRange);
+}
+
+
+function obtenerValorSeguroCatalogoM10_(ss, rangeName, fallback) {
+  const range = ss.getRangeByName(rangeName);
+
+  if (!range) return fallback;
+
+  const values = range.getValues().flat().filter(String);
+
+  if (values.includes(fallback)) return fallback;
+
+  return values.length > 0 ? values[0] : fallback;
+}
+
+
+function limpiarValidacionesFilaPresupuestoM10_(sheet, rowNumber) {
+  const lastCol = sheet.getLastColumn();
+  sheet.getRange(rowNumber, 1, 1, lastCol).clearDataValidations();
+}
+
+
+function reaplicarValidacionesFilaPresupuestoM10_(sheet, rowNumber) {
+  if (typeof repararValidacionesPresupuestoMovimientos === "function") {
+    return;
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const metasActivas = typeof obtenerMetasActivasMetas_ === "function"
+    ? obtenerMetasActivasMetas_(ss)
+    : [];
+
+  const metaCol = buscarColumnaPorEncabezadoMetas_(sheet, "Meta");
+
+  if (metaCol && metasActivas.length > 0) {
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInList([...new Set(metasActivas.filter(String))], true)
+      .setAllowInvalid(false)
+      .build();
+
+    sheet.getRange(rowNumber, metaCol).setDataValidation(rule);
+  }
+}
+
+
+function obtenerPrimeraFilaVaciaPorHeaderM10_(sheet, headerName) {
+  const col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col) {
+    throw new Error("No se encontró la columna " + headerName + " en " + sheet.getName());
+  }
+
+  const startRow = 2;
+  const maxRows = sheet.getMaxRows();
+  const values = sheet.getRange(startRow, col, maxRows - 1, 1).getValues().flat();
+
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i] || "").trim() === "") {
+      return startRow + i;
+    }
+  }
+
+  sheet.insertRowsAfter(maxRows, 1);
+  return maxRows + 1;
+}
+
+
+function escribirValorPorHeaderM10_(sheet, rowNumber, headerName, value) {
+  let col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col && headerName === "Categoria") {
+    col = buscarColumnaPorEncabezadoMetas_(sheet, "Categoría");
+  }
+
+  if (!col) {
+    throw new Error("No se encontró la columna " + headerName + " en " + sheet.getName());
+  }
+
+  sheet.getRange(rowNumber, col).setValue(value);
+}
+
+
+function crearHeaderMapM10_(headers) {
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const key = normalizarTextoMetas_(header);
+
+    if (key) {
+      map[key] = index;
+    }
+  });
+
+  return map;
+}
+
+
+function leerCampoM10_(row, map, posiblesNombres) {
+  for (const nombre of posiblesNombres) {
+    const key = normalizarTextoMetas_(nombre);
+
+    if (Object.prototype.hasOwnProperty.call(map, key)) {
+      return row[map[key]];
+    }
+  }
+
+  return "";
+}
+
+
+function verificarMetas_M10_PresupuestoDesdeMetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+
+  if (!shPresupuesto) {
+    Logger.log("No existe la hoja Presupuesto.");
+    return;
+  }
+
+  const conceptoCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Concepto");
+  const tipoCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Tipo");
+  const metaCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Meta");
+  const origenCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Origen del registro");
+  const estadoCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Estado de ejecución");
+
+  const lastRow = shPresupuesto.getLastRow();
+
+  if (lastRow < 2) {
+    Logger.log("No hay filas en Presupuesto.");
+    return;
+  }
+
+  const data = shPresupuesto.getRange(2, 1, lastRow - 1, shPresupuesto.getLastColumn()).getValues();
+
+  let total = 0;
+
+  data.forEach((row, index) => {
+    const concepto = conceptoCol ? String(row[conceptoCol - 1] || "").trim() : "";
+    const tipo = tipoCol ? String(row[tipoCol - 1] || "").trim() : "";
+    const meta = metaCol ? String(row[metaCol - 1] || "").trim() : "";
+    const origen = origenCol ? String(row[origenCol - 1] || "").trim() : "";
+    const estado = estadoCol ? String(row[estadoCol - 1] || "").trim() : "";
+
+    if (origen === "Generado desde meta") {
+      total++;
+      Logger.log("Fila " + (index + 2) + " → " + concepto + " | Tipo: " + tipo + " | Meta: " + meta + " | Estado: " + estado);
+    }
+  });
+
+  Logger.log("Total líneas de Presupuesto generadas desde metas: " + total);
+}
+/***************************************
+ * M11 — HOJA RECORDATORIOS
+ * Checklist mensual desde Presupuesto
+ ***************************************/
+
+function setupMetas_M11_HojaRecordatorios() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Presupuesto o Movimientos.");
+  }
+
+  let shRecordatorios = ss.getSheetByName("Recordatorios");
+
+  if (!shRecordatorios) {
+    shRecordatorios = ss.insertSheet("Recordatorios");
+  }
+
+  refrescarMetas_M11_Recordatorios();
+
+  SpreadsheetApp.flush();
+
+  Logger.log("M11 listo. Hoja Recordatorios creada/actualizada.");
+}
+
+
+function refrescarMetas_M11_Recordatorios() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Presupuesto o Movimientos.");
+  }
+
+  let shRecordatorios = ss.getSheetByName("Recordatorios");
+
+  if (!shRecordatorios) {
+    shRecordatorios = ss.insertSheet("Recordatorios");
+  }
+
+  try {
+    shRecordatorios.showColumns(1, shRecordatorios.getMaxColumns());
+  } catch (err) {}
+
+  shRecordatorios.clearContents();
+  shRecordatorios.getDataRange().clearDataValidations();
+
+  const headers = [
+    "Concepto",
+    "Monto",
+    "Método de Pago",
+    "Meta",
+    "Fecha sugerida",
+    "Periodo",
+    "Registrar como pagado",
+    "Fila Presupuesto",
+    "Ref del mes",
+    "Estado"
+  ];
+
+  shRecordatorios.getRange(1, 1, 1, headers.length).setValues([headers]);
+
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  const anio = hoy.getFullYear();
+  const mesIndex = hoy.getMonth();
+  const periodo = obtenerPeriodoM11_(hoy);
+  const ultimoDiaMes = new Date(anio, mesIndex + 1, 0).getDate();
+
+  const presupuestoLastRow = shPresupuesto.getLastRow();
+  const presupuestoLastCol = shPresupuesto.getLastColumn();
+
+  if (presupuestoLastRow < 2) {
+    aplicarFormatoM11_Recordatorios_(shRecordatorios);
+    return;
+  }
+
+  const presupuestoHeaders = shPresupuesto.getRange(1, 1, 1, presupuestoLastCol).getValues()[0];
+  const presupuestoMap = crearHeaderMapM11_(presupuestoHeaders);
+  const presupuestoData = shPresupuesto.getRange(2, 1, presupuestoLastRow - 1, presupuestoLastCol).getValues();
+
+  const refsRegistradas = obtenerRefsRegistradasM11_(shMovimientos);
+
+  const filas = [];
+
+  presupuestoData.forEach((row, index) => {
+    const filaPresupuesto = index + 2;
+
+    const concepto = String(leerCampoM11_(row, presupuestoMap, ["Concepto"]) || "").trim();
+    const monto = leerCampoM11_(row, presupuestoMap, ["Monto"]);
+    const metodoPago = leerCampoM11_(row, presupuestoMap, ["Método de Pago", "Metodo de Pago"]);
+    const meta = leerCampoM11_(row, presupuestoMap, ["Meta"]);
+    const diaPagoRaw = leerCampoM11_(row, presupuestoMap, ["Día de Pago", "Dia de Pago"]);
+    const tipo = String(leerCampoM11_(row, presupuestoMap, ["Tipo"]) || "").trim();
+    const activo = String(leerCampoM11_(row, presupuestoMap, ["Activo"]) || "").trim();
+    const recurrencia = String(leerCampoM11_(row, presupuestoMap, ["Recurrencia"]) || "").trim();
+
+    if (!concepto) return;
+    if (tipo !== "Recordatorio") return;
+    if (activo !== "Activo") return;
+    if (recurrencia !== "Mensual") return;
+
+    let diaPago = "";
+
+    if (diaPagoRaw instanceof Date) {
+      diaPago = diaPagoRaw.getDate();
+    } else {
+      diaPago = Number(diaPagoRaw);
+    }
+
+    if (!diaPago) return;
+
+    const diaEjecucion = Math.min(diaPago, ultimoDiaMes);
+
+    const fechaSugerida = new Date(anio, mesIndex, diaEjecucion);
+    fechaSugerida.setHours(0, 0, 0, 0);
+
+    const refMes = `RECORDATORIO-F${filaPresupuesto}-${periodo}`;
+    const yaRegistrado = refsRegistradas.includes(refMes);
+
+    filas.push([
+      concepto,
+      monto,
+      metodoPago,
+      meta,
+      fechaSugerida,
+      periodo,
+      false,
+      filaPresupuesto,
+      refMes,
+      yaRegistrado ? "Registrado" : "Pendiente"
+    ]);
+  });
+
+  if (filas.length > 0) {
+   shRecordatorios.getRange(2, 1, filas.length, headers.length).setValues(filas);
+
+    filas.forEach((fila, index) => {
+    const rowNumber = index + 2;
+    const estado = String(fila[9] || "").trim();
+    const cell = shRecordatorios.getRange(rowNumber, 7);
+
+  if (estado === "Registrado") {
+    cell.clearDataValidations();
+    cell.setValue("Pagado ✅");
+    cell.setHorizontalAlignment("center");
+    cell.setFontWeight("bold");
+  } else {
+    cell.insertCheckboxes();
+  }
+});
+
+    aplicarValidacionesM11_Recordatorios_(ss, shRecordatorios, filas.length);
+  }
+
+  aplicarFormatoM11_Recordatorios_(shRecordatorios);
+
+  try {
+    shRecordatorios.hideColumns(8, 2);
+  } catch (err) {}
+
+  SpreadsheetApp.flush();
+
+  Logger.log("Recordatorios generados: " + filas.length);
+}
+
+
+function obtenerRefsRegistradasM11_(shMovimientos) {
+  const refCol = buscarColumnaPorEncabezadoMetas_(shMovimientos, "Ref_Presupuesto");
+
+  if (!refCol) return [];
+
+  const lastRow = shMovimientos.getLastRow();
+
+  if (lastRow < 2) return [];
+
+  return shMovimientos
+    .getRange(2, refCol, lastRow - 1, 1)
+    .getValues()
+    .flat()
+    .map(value => String(value || "").trim())
+    .filter(Boolean);
+}
+
+
+function aplicarValidacionesM11_Recordatorios_(ss, shRecordatorios, numRows) {
+  const shMetodos = ss.getSheetByName("Métodos de Pago");
+
+  if (shMetodos) {
+    const ruleMetodoPago = SpreadsheetApp.newDataValidation()
+      .requireValueInRange(shMetodos.getRange("J2:J"), true)
+      .setAllowInvalid(false)
+      .build();
+
+    shRecordatorios.getRange(2, 3, numRows, 1).setDataValidation(ruleMetodoPago);
+  }
+
+  const metasActivas = typeof obtenerMetasActivasMetas_ === "function"
+    ? obtenerMetasActivasMetas_(ss)
+    : [];
+
+  if (metasActivas.length > 0) {
+    const ruleMetas = SpreadsheetApp.newDataValidation()
+      .requireValueInList([...new Set(metasActivas.filter(String))], true)
+      .setAllowInvalid(false)
+      .build();
+
+    shRecordatorios.getRange(2, 4, numRows, 1).setDataValidation(ruleMetas);
+  }
+}
+
+
+function aplicarFormatoM11_Recordatorios_(sheet) {
+  sheet.setFrozenRows(1);
+
+  sheet.getRange(1, 1, 1, 10)
+    .setFontWeight("bold")
+    .setBackground("#f3f4f6");
+
+  sheet.getRange("B:B").setNumberFormat("$#,##0");
+  sheet.getRange("E:E").setNumberFormat("dd/mm/yyyy");
+  sheet.getRange("A:J").setVerticalAlignment("middle");
+
+  sheet.setColumnWidth(1, 240);
+  sheet.setColumnWidth(2, 130);
+  sheet.setColumnWidth(3, 180);
+  sheet.setColumnWidth(4, 180);
+  sheet.setColumnWidth(5, 140);
+  sheet.setColumnWidth(6, 110);
+  sheet.setColumnWidth(7, 170);
+  sheet.setColumnWidth(8, 140);
+  sheet.setColumnWidth(9, 210);
+  sheet.setColumnWidth(10, 130);
+
+  const filter = sheet.getFilter();
+
+  if (filter) {
+    filter.remove();
+  }
+
+  sheet.getRange("A1:J1").createFilter();
+}
+
+
+function obtenerPeriodoM11_(fecha) {
+  const anio = fecha.getFullYear();
+  const mes = fecha.getMonth() + 1;
+
+  return `${anio}-${String(mes).padStart(2, "0")}`;
+}
+
+
+function crearHeaderMapM11_(headers) {
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const key = normalizarTextoMetas_(header);
+
+    if (key) {
+      map[key] = index;
+    }
+  });
+
+  return map;
+}
+
+
+function leerCampoM11_(row, map, posiblesNombres) {
+  for (const nombre of posiblesNombres) {
+    const key = normalizarTextoMetas_(nombre);
+
+    if (Object.prototype.hasOwnProperty.call(map, key)) {
+      return row[map[key]];
+    }
+  }
+
+  return "";
+}
+
+
+function verificarMetas_M11_Recordatorios() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shRecordatorios = ss.getSheetByName("Recordatorios");
+
+  if (!shRecordatorios) {
+    Logger.log("La hoja Recordatorios NO existe.");
+    return;
+  }
+
+  const lastRow = shRecordatorios.getLastRow();
+
+  Logger.log("Hoja Recordatorios: OK");
+  Logger.log("Filas generadas: " + Math.max(lastRow - 1, 0));
+  Logger.log("Encabezados: " + shRecordatorios.getRange(1, 1, 1, 10).getValues()[0].join(" | "));
+
+  if (lastRow >= 2) {
+    Logger.log("Primer recordatorio: " + shRecordatorios.getRange(2, 1).getValue());
+    Logger.log("Estado primer recordatorio: " + shRecordatorios.getRange(2, 10).getValue());
+  }
+}
+/***************************************
+ * M11B — CREAR RECORDATORIOS DESDE DEUDAS
+ * Flujo:
+ * Deudas → Presupuesto tipo Recordatorio → Recordatorios
+ ***************************************/
+
+function setupMetas_M11B_PresupuestoDesdeDeudas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shDeudas = ss.getSheetByName("Deudas");
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+
+  if (!shDeudas || !shPresupuesto) {
+    throw new Error("Faltan hojas requeridas: Deudas o Presupuesto.");
+  }
+
+  prepararCatalogosM11B_(ss);
+
+  const deudasLastRow = shDeudas.getLastRow();
+  const deudasLastCol = shDeudas.getLastColumn();
+
+  if (deudasLastRow < 2) {
+    Logger.log("No hay deudas para procesar.");
+    return;
+  }
+
+  const deudasHeaders = shDeudas.getRange(1, 1, 1, deudasLastCol).getValues()[0];
+  const deudasMap = crearHeaderMapM11B_(deudasHeaders);
+  const deudasData = shDeudas.getRange(2, 1, deudasLastRow - 1, deudasLastCol).getValues();
+
+  let creadas = 0;
+  let actualizadas = 0;
+  let omitidas = 0;
+
+  deudasData.forEach((row, index) => {
+    const filaDeuda = index + 2;
+
+    const nombreDeuda = String(leerCampoM11B_(row, deudasMap, ["Nombre"]) || "").trim();
+    const cuotaMensual = Number(leerCampoM11B_(row, deudasMap, ["Cuota mensual"]) || 0);
+    const diaPago = Number(leerCampoM11B_(row, deudasMap, ["Día de pago", "Dia de pago"]) || 0);
+    const cuentaPago = String(leerCampoM11B_(row, deudasMap, ["Cuenta de pago predeterminada"]) || "").trim();
+    const estado = String(leerCampoM11B_(row, deudasMap, ["Estado"]) || "").trim();
+
+    if (!nombreDeuda || !cuotaMensual || cuotaMensual <= 0 || !diaPago) {
+      omitidas++;
+      return;
+    }
+
+    if (!["Activa", "Activo", "Vigente", ""].includes(estado)) {
+      omitidas++;
+      return;
+    }
+
+    const filaPresupuestoExistente = buscarFilaPresupuestoPorDeudaM11B_(shPresupuesto, nombreDeuda);
+    const filaPresupuesto = filaPresupuestoExistente || obtenerPrimeraFilaVaciaPorHeaderM10_(shPresupuesto, "Concepto");
+
+    limpiarValidacionesFilaPresupuestoM10_(shPresupuesto, filaPresupuesto);
+
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Concepto", "Pago deuda: " + nombreDeuda);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Monto", cuotaMensual);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Día de Pago", diaPago);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Método de Pago", cuentaPago);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Destino", cuentaPago);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Destino_TC", "");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Destino_Deuda", nombreDeuda);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Recurrencia", "Mensual");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Moneda", "COP");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "COP", cuotaMensual);
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Tipo", "Recordatorio");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Categoria", "N/A");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Naturaleza", "Transferencia");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Etiqueta", "Pago de deuda");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Meta", "");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Activo", "Activo");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Versión presupuesto", obtenerValorSeguroCatalogoM10_(ss, "cat_version_presupuesto", "Actual"));
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Origen del registro", "Generado desde deuda");
+    escribirValorPorHeaderM10_(shPresupuesto, filaPresupuesto, "Estado de ejecución", "Pendiente");
+
+    if (filaPresupuestoExistente) {
+      actualizadas++;
+    } else {
+      creadas++;
+    }
+
+    Logger.log("Deuda procesada: " + nombreDeuda + " → Presupuesto fila " + filaPresupuesto);
+  });
+
+  if (typeof repararValidacionesPresupuestoMovimientos === "function") {
+    repararValidacionesPresupuestoMovimientos();
+  }
+
+  if (typeof refrescarMetas_M11_Recordatorios === "function") {
+    refrescarMetas_M11_Recordatorios();
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log("M11B listo.");
+  Logger.log("Recordatorios de deuda creados: " + creadas);
+  Logger.log("Recordatorios de deuda actualizados: " + actualizadas);
+  Logger.log("Deudas omitidas: " + omitidas);
+}
+
+
+function buscarFilaPresupuestoPorDeudaM11B_(sheet, nombreDeuda) {
+  const conceptoCol = buscarColumnaPorEncabezadoMetas_(sheet, "Concepto");
+  const destinoDeudaCol = buscarColumnaPorEncabezadoMetas_(sheet, "Destino_Deuda");
+  const etiquetaCol = buscarColumnaPorEncabezadoMetas_(sheet, "Etiqueta");
+
+  if (!conceptoCol) return null;
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return null;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+
+  const nombreNormalizado = normalizarTextoMetas_(nombreDeuda);
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+
+    const concepto = String(row[conceptoCol - 1] || "").trim();
+    const destinoDeuda = destinoDeudaCol ? String(row[destinoDeudaCol - 1] || "").trim() : "";
+    const etiqueta = etiquetaCol ? String(row[etiquetaCol - 1] || "").trim() : "";
+
+    const conceptoNormalizado = normalizarTextoMetas_(concepto);
+    const destinoNormalizado = normalizarTextoMetas_(destinoDeuda);
+
+    const coincidePorDestino = destinoNormalizado === nombreNormalizado && etiqueta === "Pago de deuda";
+    const coincidePorConcepto = conceptoNormalizado === normalizarTextoMetas_("Pago deuda: " + nombreDeuda) ||
+      conceptoNormalizado === normalizarTextoMetas_("Pago deuda " + nombreDeuda) ||
+      conceptoNormalizado.includes(nombreNormalizado) && conceptoNormalizado.includes("pago deuda");
+
+    if (coincidePorDestino || coincidePorConcepto) {
+      return i + 2;
+    }
+  }
+
+  return null;
+}
+
+
+function prepararCatalogosM11B_(ss) {
+  asegurarValorEnRangoNombradoM10_(ss, "cat_tipo_presupuesto", "Recordatorio");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_estado", "Activo");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_recurrencia", "Mensual");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_monedas", "COP");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_origen_registro", "Generado desde deuda");
+  asegurarValorEnRangoNombradoM10_(ss, "cat_estado_ejecucion", "Pendiente");
+}
+
+
+function crearHeaderMapM11B_(headers) {
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const key = normalizarTextoMetas_(header);
+
+    if (key) {
+      map[key] = index;
+    }
+  });
+
+  return map;
+}
+
+
+function leerCampoM11B_(row, map, posiblesNombres) {
+  for (const nombre of posiblesNombres) {
+    const key = normalizarTextoMetas_(nombre);
+
+    if (Object.prototype.hasOwnProperty.call(map, key)) {
+      return row[map[key]];
+    }
+  }
+
+  return "";
+}
+
+
+function verificarMetas_M11B_PresupuestoDesdeDeudas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shRecordatorios = ss.getSheetByName("Recordatorios");
+
+  if (!shPresupuesto) {
+    Logger.log("No existe la hoja Presupuesto.");
+    return;
+  }
+
+  const origenCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Origen del registro");
+  const conceptoCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Concepto");
+  const tipoCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Tipo");
+  const destinoDeudaCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Destino_Deuda");
+
+  const lastRow = shPresupuesto.getLastRow();
+
+  if (lastRow < 2) {
+    Logger.log("No hay filas en Presupuesto.");
+    return;
+  }
+
+  const data = shPresupuesto.getRange(2, 1, lastRow - 1, shPresupuesto.getLastColumn()).getValues();
+
+  let total = 0;
+
+  data.forEach((row, index) => {
+    const origen = origenCol ? String(row[origenCol - 1] || "").trim() : "";
+
+    if (origen === "Generado desde deuda") {
+      total++;
+      Logger.log(
+        "Fila " + (index + 2) +
+        " → " + String(row[conceptoCol - 1] || "") +
+        " | Tipo: " + String(row[tipoCol - 1] || "") +
+        " | Deuda: " + String(row[destinoDeudaCol - 1] || "")
+      );
+    }
+  });
+
+  Logger.log("Total líneas de Presupuesto generadas desde deudas: " + total);
+
+  if (shRecordatorios) {
+    Logger.log("Filas actuales en Recordatorios: " + Math.max(shRecordatorios.getLastRow() - 1, 0));
+  }
+}
+/***************************************
+ * DEUDAS — ACCESO PRINCIPAL PARA MENÚ FINTRO
+ ***************************************/
+
+function actualizarCuotasDeudasEnPresupuesto() {
+  setupMetas_M11B_PresupuestoDesdeDeudas();
+}
+
+function verificarCuotasDeudasEnPresupuesto() {
+  verificarMetas_M11B_PresupuestoDesdeDeudas();
+}
+/***************************************
+ * M12 — REGISTRAR RECORDATORIOS COMO MOVIMIENTOS
+ ***************************************/
+
+function manejarEdicionRecordatorios(e) {
+  if (!e || !e.range) return;
+
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== "Recordatorios") return;
+
+  const row = e.range.getRow();
+  const col = e.range.getColumn();
+
+  if (row < 2) return;
+
+  const registrarCol = buscarColumnaPorEncabezadoMetas_(sheet, "Registrar como pagado");
+  if (!registrarCol || col !== registrarCol) return;
+
+  const marcado = sheet.getRange(row, registrarCol).getValue();
+  if (marcado !== true) return;
+
+  registrarRecordatorioComoMovimiento_(row);
+}
+
+
+function registrarRecordatorioComoMovimiento_(filaRecordatorio) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shRecordatorios = ss.getSheetByName("Recordatorios");
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shRecordatorios || !shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Recordatorios, Presupuesto o Movimientos.");
+  }
+
+  const filaPresupuesto = Number(leerValorPorHeaderM12_(shRecordatorios, filaRecordatorio, "Fila Presupuesto"));
+  const refMes = String(leerValorPorHeaderM12_(shRecordatorios, filaRecordatorio, "Ref del mes") || "").trim();
+
+  if (!filaPresupuesto || !refMes) {
+    escribirValorPorHeaderM12_(shRecordatorios, filaRecordatorio, "Estado", "Error");
+    escribirValorPorHeaderM12_(shRecordatorios, filaRecordatorio, "Registrar como pagado", false);
+    throw new Error("Falta Fila Presupuesto o Ref del mes en Recordatorios.");
+  }
+
+  if (existeRefMovimientoM12_(shMovimientos, refMes)) {
+    marcarRecordatorioComoPagadoUX_M12_(shRecordatorios, filaRecordatorio);
+    return;
+  }
+
+  const movimiento = construirMovimientoDesdeFilaPresupuestoM12_(shPresupuesto, filaPresupuesto, refMes);
+
+  crearMovimientoDesdeObjetoMetas_(movimiento);
+
+  escribirValorPorHeaderM12_(shRecordatorios, filaRecordatorio, "Estado", "Registrado");
+  escribirValorPorHeaderM12_(shRecordatorios, filaRecordatorio, "Registrar como pagado", false);
+
+  actualizarEstadoEjecucionPresupuestoM12_(shPresupuesto, filaPresupuesto, "Registrado");
+
+  if (typeof setupMetas_M5_Calculos === "function") {
+    setupMetas_M5_Calculos();
+  }
+
+  if (typeof setupMetas_M6_DashboardData === "function") {
+    setupMetas_M6_DashboardData();
+  }
+
+  if (typeof setupMetas_M7_DashboardVisual === "function") {
+    setupMetas_M7_DashboardVisual();
+  }
+
+  SpreadsheetApp.flush();
+}
+
+
+function construirMovimientoDesdeFilaPresupuestoM12_(shPresupuesto, filaPresupuesto, refMes) {
+  return {
+    fecha: new Date(),
+    concepto: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Concepto"),
+    monto: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Monto"),
+    moneda: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Moneda") || "COP",
+    cop: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "COP") || leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Monto"),
+    metodoPago: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Método de Pago"),
+    tipoMetodo: obtenerTipoMetodoRecordatorioM12_(leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Método de Pago")),
+    destino: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Destino"),
+    destinoTC: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Destino_TC"),
+    destinoDeuda: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Destino_Deuda"),
+    categoria: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Categoria") || leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Categoría"),
+    naturaleza: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Naturaleza"),
+    etiqueta: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Etiqueta"),
+    meta: leerValorPorHeaderM12_(shPresupuesto, filaPresupuesto, "Meta"),
+    origenEjecucion: "Recordatorio confirmado",
+    refPresupuesto: refMes
+  };
+}
+
+
+function existeRefMovimientoM12_(shMovimientos, refMes) {
+  const refCol = buscarColumnaPorEncabezadoMetas_(shMovimientos, "Ref_Presupuesto");
+
+  if (!refCol) return false;
+
+  const lastRow = shMovimientos.getLastRow();
+  if (lastRow < 2) return false;
+
+  const refs = shMovimientos
+    .getRange(2, refCol, lastRow - 1, 1)
+    .getValues()
+    .flat()
+    .map(value => String(value || "").trim());
+
+  return refs.includes(refMes);
+}
+
+
+function actualizarEstadoEjecucionPresupuestoM12_(shPresupuesto, filaPresupuesto, estado) {
+  const estadoCol = buscarColumnaPorEncabezadoMetas_(shPresupuesto, "Estado de ejecución");
+
+  if (!estadoCol) return;
+
+  const cell = shPresupuesto.getRange(filaPresupuesto, estadoCol);
+
+  try {
+    cell.clearDataValidations();
+    cell.setValue(estado);
+  } catch (err) {
+    Logger.log("No se pudo actualizar Estado de ejecución: " + err.message);
+  }
+}
+
+
+function obtenerTipoMetodoRecordatorioM12_(metodoPago) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shMetodos = ss.getSheetByName("Métodos de Pago");
+
+  if (!shMetodos || !metodoPago) return "";
+
+  const lastRow = shMetodos.getLastRow();
+  if (lastRow < 2) return "";
+
+  const data = shMetodos.getRange(2, 2, lastRow - 1, 2).getValues();
+
+  const encontrado = data.find(row =>
+    String(row[0]).trim() === String(metodoPago).trim()
+  );
+
+  return encontrado ? encontrado[1] : "";
+}
+
+
+function leerValorPorHeaderM12_(sheet, rowNumber, headerName) {
+  let col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col && headerName === "Categoria") {
+    col = buscarColumnaPorEncabezadoMetas_(sheet, "Categoría");
+  }
+
+  if (!col) return "";
+
+  return sheet.getRange(rowNumber, col).getValue();
+}
+
+
+function escribirValorPorHeaderM12_(sheet, rowNumber, headerName, value) {
+  const col = buscarColumnaPorEncabezadoMetas_(sheet, headerName);
+
+  if (!col) {
+    throw new Error("No se encontró la columna " + headerName + " en " + sheet.getName());
+  }
+
+  const cell = sheet.getRange(rowNumber, col);
+
+  try {
+    cell.clearDataValidations();
+  } catch (err) {}
+
+  cell.setValue(value);
+}
+
+
+function crearTriggerRecordatoriosChecklist() {
+  eliminarTriggerRecordatoriosChecklist();
+
+  ScriptApp.newTrigger("manejarEdicionRecordatorios")
+    .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+    .onEdit()
+    .create();
+}
+
+
+function eliminarTriggerRecordatoriosChecklist() {
+  const triggers = ScriptApp.getProjectTriggers();
+
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === "manejarEdicionRecordatorios") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+}
+
+
+function probarPrimerRecordatorioComoMovimiento() {
+  registrarRecordatorioComoMovimiento_(2);
+}
+function marcarRecordatorioComoPagadoUX_M12_(shRecordatorios, filaRecordatorio) {
+  const registrarCol = buscarColumnaPorEncabezadoMetas_(shRecordatorios, "Registrar como pagado");
+  const estadoCol = buscarColumnaPorEncabezadoMetas_(shRecordatorios, "Estado");
+
+  if (registrarCol) {
+    const cell = shRecordatorios.getRange(filaRecordatorio, registrarCol);
+    cell.clearDataValidations();
+    cell.setValue("Pagado ✅");
+    cell.setHorizontalAlignment("center");
+    cell.setFontWeight("bold");
+  }
+
+  if (estadoCol) {
+    const cell = shRecordatorios.getRange(filaRecordatorio, estadoCol);
+    cell.clearDataValidations();
+    cell.setValue("Registrado");
+  }
+}
+function verificarRecordatoriosSiguienteMes() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Presupuesto o Movimientos.");
+  }
+
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  const siguienteMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 1);
+  siguienteMes.setHours(0, 0, 0, 0);
+
+  const periodoActual = obtenerPeriodoM11_(hoy);
+  const periodoSiguiente = obtenerPeriodoM11_(siguienteMes);
+
+  const refsRegistradas = obtenerRefsRegistradasM11_(shMovimientos);
+
+  const lastRow = shPresupuesto.getLastRow();
+  const lastCol = shPresupuesto.getLastColumn();
+
+  if (lastRow < 2) {
+    Logger.log("No hay filas en Presupuesto.");
+    return;
+  }
+
+  const headers = shPresupuesto.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = crearHeaderMapM11_(headers);
+  const data = shPresupuesto.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  Logger.log("Periodo actual: " + periodoActual);
+  Logger.log("Periodo siguiente: " + periodoSiguiente);
+  Logger.log("===== VERIFICACIÓN SIGUIENTE MES =====");
+
+  data.forEach((row, index) => {
+    const filaPresupuesto = index + 2;
+
+    const concepto = String(leerCampoM11_(row, map, ["Concepto"]) || "").trim();
+    const tipo = String(leerCampoM11_(row, map, ["Tipo"]) || "").trim();
+    const activo = String(leerCampoM11_(row, map, ["Activo"]) || "").trim();
+    const recurrencia = String(leerCampoM11_(row, map, ["Recurrencia"]) || "").trim();
+
+    if (!concepto) return;
+    if (tipo !== "Recordatorio") return;
+    if (activo !== "Activo") return;
+    if (recurrencia !== "Mensual") return;
+
+    const refActual = `RECORDATORIO-F${filaPresupuesto}-${periodoActual}`;
+    const refSiguiente = `RECORDATORIO-F${filaPresupuesto}-${periodoSiguiente}`;
+
+    const estadoActual = refsRegistradas.includes(refActual) ? "Registrado" : "Pendiente";
+    const estadoSiguiente = refsRegistradas.includes(refSiguiente) ? "Registrado" : "Pendiente";
+
+    Logger.log(concepto);
+    Logger.log("Este mes: " + refActual + " → " + estadoActual);
+    Logger.log("Siguiente mes: " + refSiguiente + " → " + estadoSiguiente);
+    Logger.log("----------------------");
+  });
+}
+/***************************************
+ * TRIGGER DIARIO — REFRESCAR RECORDATORIOS
+ ***************************************/
+
+function crearTriggerDiarioRecordatoriosChecklist() {
+  eliminarTriggerDiarioRecordatoriosChecklist();
+
+  ScriptApp.newTrigger("refrescarMetas_M11_Recordatorios")
+    .timeBased()
+    .everyDays(1)
+    .atHour(6)
+    .create();
+
+  Logger.log("Trigger diario creado: refrescarMetas_M11_Recordatorios a las 6:00 a.m.");
+}
+
+
+function eliminarTriggerDiarioRecordatoriosChecklist() {
+  const triggers = ScriptApp.getProjectTriggers();
+
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === "refrescarMetas_M11_Recordatorios") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  Logger.log("Triggers diarios anteriores eliminados para refrescarMetas_M11_Recordatorios.");
+}
+
+
+function verificarTriggerDiarioRecordatoriosChecklist() {
+  const triggers = ScriptApp.getProjectTriggers();
+
+  const encontrados = triggers.filter(trigger =>
+    trigger.getHandlerFunction() === "refrescarMetas_M11_Recordatorios"
+  );
+
+  if (encontrados.length === 0) {
+    Logger.log("No hay trigger diario activo para Recordatorios.");
+    return;
+  }
+
+  Logger.log("Trigger diario activo para Recordatorios: OK");
+  Logger.log("Cantidad de triggers encontrados: " + encontrados.length);
+}
+/***************************************
+ * M14A — DASHBOARD_DATA: RECORDATORIOS
+ ***************************************/
+
+function setupMetas_M14A_DashboardDataRecordatorios() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shDashboardData = ss.getSheetByName("Dashboard_Data");
+  const shRecordatorios = ss.getSheetByName("Recordatorios");
+
+  if (!shDashboardData || !shRecordatorios) {
+    throw new Error("Faltan hojas requeridas: Dashboard_Data o Recordatorios.");
+  }
+
+  const startRow = obtenerFilaBloqueRecordatoriosDashboardData_(shDashboardData);
+
+  const rows = [
+    ["RECORDATORIOS", ""],
+    ["Periodo actual", `=TEXT(TODAY();"yyyy-mm")`],
+    ["Recordatorios pendientes", `=COUNTIFS(Recordatorios!$J:$J;"Pendiente";Recordatorios!$F:$F;TEXT(TODAY();"yyyy-mm"))`],
+    ["Recordatorios pagados", `=COUNTIFS(Recordatorios!$J:$J;"Registrado";Recordatorios!$F:$F;TEXT(TODAY();"yyyy-mm"))`],
+    ["Total pendiente por pagar", `=IFERROR(SUMIFS(Recordatorios!$B:$B;Recordatorios!$J:$J;"Pendiente";Recordatorios!$F:$F;TEXT(TODAY();"yyyy-mm"));0)`],
+    ["Total pagado desde recordatorios", `=IFERROR(SUMIFS(Recordatorios!$B:$B;Recordatorios!$J:$J;"Registrado";Recordatorios!$F:$F;TEXT(TODAY();"yyyy-mm"));0)`],
+    ["Metas con aporte pendiente", `=COUNTIFS(Recordatorios!$D:$D;"<>";Recordatorios!$J:$J;"Pendiente";Recordatorios!$F:$F;TEXT(TODAY();"yyyy-mm"))`],
+    ["Deudas pendientes de pago", `=COUNTIFS(Recordatorios!$A:$A;"Pago deuda:*";Recordatorios!$J:$J;"Pendiente";Recordatorios!$F:$F;TEXT(TODAY();"yyyy-mm"))`]
+  ];
+
+  shDashboardData.getRange(startRow, 1, rows.length, 2).setValues(rows);
+
+  shDashboardData.getRange(startRow, 1, 1, 2)
+    .setFontWeight("bold")
+    .setBackground("#f3f4f6");
+
+  shDashboardData.getRange(startRow + 1, 1, rows.length - 1, 1)
+    .setFontWeight("bold");
+
+  shDashboardData.getRange(startRow + 4, 2, 2, 1)
+    .setNumberFormat("$#,##0");
+
+  shDashboardData.autoResizeColumns(1, 2);
+
+  SpreadsheetApp.flush();
+
+  Logger.log("Bloque RECORDATORIOS creado/actualizado en Dashboard_Data desde fila " + startRow);
+}
+
+
+function obtenerFilaBloqueRecordatoriosDashboardData_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 1);
+
+  const values = sheet.getRange(1, 1, lastRow, 1).getValues().flat();
+
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i]).trim().toUpperCase() === "RECORDATORIOS") {
+      return i + 1;
+    }
+  }
+
+  return lastRow + 3;
+}
+
+
+function verificarMetas_M14A_DashboardDataRecordatorios() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shDashboardData = ss.getSheetByName("Dashboard_Data");
+
+  if (!shDashboardData) {
+    Logger.log("Dashboard_Data NO existe.");
+    return;
+  }
+
+  const startRow = obtenerFilaBloqueRecordatoriosDashboardData_(shDashboardData);
+
+  Logger.log("Bloque RECORDATORIOS encontrado en fila: " + startRow);
+  Logger.log("Periodo actual: " + shDashboardData.getRange(startRow + 1, 2).getValue());
+  Logger.log("Pendientes: " + shDashboardData.getRange(startRow + 2, 2).getValue());
+  Logger.log("Pagados: " + shDashboardData.getRange(startRow + 3, 2).getValue());
+  Logger.log("Total pendiente: " + shDashboardData.getRange(startRow + 4, 2).getValue());
+}
+/***************************************
+ * M14B — DASHBOARD VISUAL: RECORDATORIOS
+ ***************************************/
+
+function setupMetas_M14B_DashboardVisualRecordatorios() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shDashboard = ss.getSheetByName("Dashboard");
+  const shDashboardData = ss.getSheetByName("Dashboard_Data");
+
+  if (!shDashboard || !shDashboardData) {
+    throw new Error("Faltan hojas requeridas: Dashboard o Dashboard_Data.");
+  }
+
+  const dataStartRow = obtenerFilaBloqueRecordatoriosDashboardData_(shDashboardData);
+  const startRow = obtenerFilaBloqueRecordatoriosDashboardVisual_(shDashboard);
+
+  const rows = [
+    ["Recordatorios del mes", "", "", ""],
+    ["Pendientes", `=Dashboard_Data!B${dataStartRow + 2}`, "Pagados", `=Dashboard_Data!B${dataStartRow + 3}`],
+    ["Total pendiente", `=Dashboard_Data!B${dataStartRow + 4}`, "Total pagado", `=Dashboard_Data!B${dataStartRow + 5}`],
+    ["Metas pendientes", `=Dashboard_Data!B${dataStartRow + 6}`, "Deudas pendientes", `=Dashboard_Data!B${dataStartRow + 7}`]
+  ];
+
+  shDashboard.getRange(startRow, 1, rows.length, 4).setValues(rows);
+
+  shDashboard.getRange(startRow, 1, 1, 4)
+    .merge()
+    .setFontWeight("bold")
+    .setFontSize(14)
+    .setBackground("#f3f4f6");
+
+  shDashboard.getRange(startRow + 1, 1, 3, 4)
+    .setVerticalAlignment("middle")
+    .setBorder(true, true, true, true, true, true);
+
+  shDashboard.getRange(startRow + 1, 1, 3, 1).setFontWeight("bold");
+  shDashboard.getRange(startRow + 1, 3, 3, 1).setFontWeight("bold");
+
+  shDashboard.getRange(startRow + 2, 2, 1, 1).setNumberFormat("$#,##0");
+  shDashboard.getRange(startRow + 2, 4, 1, 1).setNumberFormat("$#,##0");
+
+  shDashboard.setColumnWidth(1, 180);
+  shDashboard.setColumnWidth(2, 140);
+  shDashboard.setColumnWidth(3, 180);
+  shDashboard.setColumnWidth(4, 140);
+
+  SpreadsheetApp.flush();
+
+  Logger.log("Bloque Recordatorios del mes creado/actualizado en Dashboard desde fila " + startRow);
+}
+
+
+function obtenerFilaBloqueRecordatoriosDashboardVisual_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 1);
+
+  const values = sheet.getRange(1, 1, lastRow, 1).getValues().flat();
+
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i]).trim().toLowerCase() === "recordatorios del mes") {
+      return i + 1;
+    }
+  }
+
+  return lastRow + 3;
+}
+
+
+function verificarMetas_M14B_DashboardVisualRecordatorios() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shDashboard = ss.getSheetByName("Dashboard");
+
+  if (!shDashboard) {
+    Logger.log("Dashboard NO existe.");
+    return;
+  }
+
+  const startRow = obtenerFilaBloqueRecordatoriosDashboardVisual_(shDashboard);
+
+  Logger.log("Bloque Recordatorios del mes encontrado en fila: " + startRow);
+  Logger.log("Título: " + shDashboard.getRange(startRow, 1).getValue());
+  Logger.log("Pendientes: " + shDashboard.getRange(startRow + 1, 2).getValue());
+  Logger.log("Pagados: " + shDashboard.getRange(startRow + 1, 4).getValue());
+  Logger.log("Total pendiente: " + shDashboard.getRange(startRow + 2, 2).getValue());
+}
+function actualizarDashboardMetasFintru() {
+  setupMetas_M5_Calculos();
+  setupMetas_M6_DashboardData();
+  setupMetas_M7_DashboardVisual();
+}
+
+function actualizarDashboardRecordatoriosFintru() {
+  setupMetas_M14A_DashboardDataRecordatorios();
+  setupMetas_M14B_DashboardVisualRecordatorios();
+}
