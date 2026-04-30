@@ -1,0 +1,224 @@
+# Memoria Técnica y Funcional — Presupuesto Fintru
+**Versión analizada:** Inicial  
+**Fecha de análisis:** 30/04/2026  
+**Archivo:** Presupuesto Fintru (Google Sheets)  
+**Moneda base:** COP | **TRM referencia:** 3.600  
+**Porcentajes ideales (regla 50/30/20):** Consumo Obligatorio 50% · Consumo Libre 30% · Patrimonio 20%
+
+---
+
+## Índice de Hojas
+
+| # | Nombre | Tipo | Propósito Principal |
+|---|--------|------|---------------------|
+| 1 | Catálogos | Catálogo maestro | Valores de referencia y parámetros globales del sistema |
+| 2 | Cuentas | Catálogo | Registro de cuentas bancarias del usuario |
+| 3 | Tarjetas | Catálogo | Registro de tarjetas de crédito |
+| 4 | Deudas | Catálogo | Registro de deudas y obligaciones financieras |
+| 5 | Métodos de Pago | Catálogo derivado | Vista consolidada de cuentas, tarjetas y deudas como medios de pago |
+| 6 | Diagnóstico | Diagnóstico / Análisis | Comparativo presupuesto real vs ideal 50/30/20 vs Plan Fintru |
+| 7 | Presupuesto | Captura / Planificación | Plan presupuestal mensual de ingresos y egresos |
+| 8 | Movimientos | Captura | Registro de transacciones reales ejecutadas |
+| 9 | Atajos | Captura rápida | Acceso directo para registrar gastos frecuentes |
+| 10 | Recordatorios | Recordatorio / Automatización | Seguimiento de pagos programados del mes |
+| 11 | Metas | Planificación / Seguimiento | Objetivos financieros y bolsillos de ahorro |
+| 12 | Aportes_Metas | Captura | Registro histórico de aportes y retiros sobre metas |
+| 13 | Dashboard | Visualización | Panel principal de resumen financiero del mes |
+| 14 | Dashboard_Data | Cálculo / Backend | Datos calculados que alimentan el Dashboard |
+
+---
+
+## 1. Catálogos
+
+### Propósito
+Hoja maestra que almacena todos los valores permitidos del sistema (listas controladas) y los parámetros globales de configuración. Es la fuente de verdad para todas las validaciones de datos del archivo.
+
+### Estructura
+
+#### Parámetros Globales (A1:B10)
+| Campo | Valor |
+|-------|-------|
+| Moneda global | COP |
+| TRM actual | 3600 |
+| Fecha TRM | 28/04/2026 |
+| Día actual | 30/04/2026 |
+| Mes actual | abril |
+| Año actual | 2026 |
+| % Consumo obligatorio ideal | 50% |
+| % Consumo libre ideal | 30% |
+| % Patrimonio ideal | 20% |
+
+#### Listas de Valores (columnas D en adelante)
+
+| Lista | Valores |
+|-------|---------|
+| **Naturaleza** | Ingreso, Egreso, Transferencia, N/A |
+| **Categoría** | Consumo Obligatorio, Consumo Libre, Patrimonio, N/A |
+| **Tipo** | Automático, Recordatorio, Atajo, N/A |
+| **Recurrencia** | Única, Diaria, Semanal, Quincenal, Mensual, Bimestral, Anual, N/A |
+| **Estado** | Activo, Inactivo |
+| **Tipo de cuenta** | Efectivo, Cuenta de ahorro, Cuenta corriente, Billetera digital, Bolsillo, Inversión, Cuenta bancaria |
+| **Moneda** | COP, USD |
+
+#### Catálogo de Etiquetas (A13:C~40+)
+Las etiquetas están organizadas por Categoría:
+
+**Consumo Obligatorio:** Arriendo, Servicios públicos, Salud, Seguros, Alimentación básica, Transporte obligatorio, Educación, Mascotas
+
+**Consumo Libre:** Suscripciones, Streaming, Restaurantes, Domicilios, Ropa, Entretenimiento, Compras impulsivas, Viajes, Tecnología, Salidas
+
+**Patrimonio:** Ahorro, Inversión, Fondo de emergencia, Pago de deuda, Abono extra a tarjeta de crédito, Compra de activos
+
+**Transferencias / Ajustes:** Costo Bancario, Pago de tarjeta, Pago mínimo de tarjeta, Transferencia entre cuentas propias, Ajuste de conciliación, Conversión de moneda, Préstamo recibido, Abono extra a deuda
+
+**Ingresos (Etiqueta):** Activo, Pasivo, Salario, Dividendos, Renta, Comisión
+
+### Rol en el Sistema
+- **Alimenta:** Todas las hojas del sistema (es la fuente de todas las validaciones de listas desplegables).
+- **Campos críticos:** Las columnas de listas (Naturaleza, Categoría, Tipo, Etiqueta) deben mantenerse consistentes. Cualquier cambio rompe las validaciones de otras hojas.
+- **Parámetros globales:** El % 50/30/20 es consumido por Diagnóstico y Dashboard_Data.
+
+---
+
+## 2. Cuentas
+
+### Propósito
+Catálogo de cuentas bancarias y financieras del usuario. Sirve como referencia maestra de todos los activos líquidos y de ahorro.
+
+### Estructura
+
+| Columna | Campo | Tipo | Descripción |
+|---------|-------|------|-------------|
+| A | ID_Cuenta | Manual / Clave primaria | Identificador único de la cuenta |
+| B | Nombre | Manual | Nombre descriptivo de la cuenta |
+| C | Tipo de cuenta | Desplegable | Efectivo, Cuenta de ahorro, Cuenta corriente, Billetera digital, Bolsillo, Inversión, Cuenta bancaria |
+| D | Saldo conciliado | Manual | Último saldo real verificado |
+| E | Fecha conciliación | Manual | Fecha de la última conciliación |
+| F | Saldo calculado | Calculado | Saldo actualizado con movimientos posteriores a la conciliación |
+| G | Genera intereses | Desplegable | Sí / No |
+| H | Tasa interés E.A. | Manual | Tasa de interés efectiva anual |
+| I | Periodicidad interés | Desplegable | Frecuencia de capitalización |
+| J | Estado | Desplegable | Activo / Inactivo |
+| K | Cuenta patrimonio | Desplegable / Referencia | Indica si esta cuenta es considerada patrimonio |
+
+### Relaciones
+- **Alimenta:** Métodos de Pago (como fuente de cuentas destino), Tarjetas (cuenta de pago predeterminada), Deudas (cuenta de pago predeterminada), Metas (cuenta referencia), Aportes_Metas, Dashboard_Data (saldo total en cuentas).
+- **Recibe datos de:** Movimientos (los movimientos actualizan el Saldo calculado).
+
+---
+
+## 3. Tarjetas
+
+### Propósito
+Catálogo de tarjetas de crédito del usuario. Permite calcular deuda total, cupo disponible y gestionar pagos.
+
+### Estructura
+
+| Columna | Campo | Tipo | Descripción |
+|---------|-------|------|-------------|
+| A | ID_Tarjeta | Manual / Clave primaria | Identificador único |
+| B | Nombre | Manual | Nombre de la tarjeta |
+| C | Cupo máximo | Manual | Límite de crédito total |
+| D | Deuda conciliada | Manual | Deuda verificada en último corte |
+| E | Fecha conciliación | Manual | Fecha del último corte/conciliación |
+| F | Deuda calculada | Calculado | Deuda actualizada con movimientos |
+| G | Cupo disponible | Calculado | Cupo máximo − Deuda calculada |
+| H | Día de corte | Manual | Día del mes en que cierra el período |
+| I | Día de pago | Manual | Día límite de pago |
+| J | Pago mínimo | Manual / Calculado | Monto mínimo de pago |
+| K | Tasa interés E.A. | Manual | Tasa efectiva anual de la tarjeta |
+| L | Estado | Desplegable | Activo / Inactivo |
+| M | Cuenta de pago predeterminada | Referencia | ID o nombre de la cuenta desde donde se paga |
+
+### Relaciones
+- **Alimenta:** Métodos de Pago (como "Destino_TC" en movimientos), Dashboard_Data (Deuda total en tarjetas).
+- **Recibe de:** Movimientos (compras con tarjeta actualizan deuda calculada).
+
+---
+
+## 4. Deudas
+
+### Propósito
+Catálogo de deudas no relacionadas con tarjetas de crédito (préstamos, créditos, deudas personales).
+
+### Estructura
+
+| Columna | Campo | Tipo | Descripción |
+|---------|-------|------|-------------|
+| A | ID_Deuda | Manual / Clave primaria | Identificador único |
+| B | Nombre | Manual | Descripción de la deuda |
+| C | Tipo deuda | Desplegable | Tipo de obligación |
+| D | Saldo conciliado | Manual | Saldo verificado |
+| E | Fecha conciliación | Manual | Fecha de verificación |
+| F | Saldo calculado | Calculado | Saldo actualizado con pagos registrados |
+| G | Tasa interés E.A. | Manual | Tasa efectiva anual |
+| H | Cuota mensual | Manual | Valor de la cuota mensual fija |
+| I | Día de pago | Manual | Día del mes para el pago |
+| J | Cuenta de pago predeterminada | Referencia | Cuenta desde la que se paga |
+| K | Fecha inicio | Manual | Fecha de inicio de la deuda |
+| L | Fecha final estimada | Calculado / Manual | Fecha estimada de liquidación |
+| M | Estado | Desplegable | Activo / Inactivo |
+
+### Relaciones
+- **Alimenta:** Métodos de Pago (como "Destino_Deuda"), Dashboard_Data (Deuda total no tarjeta).
+- **Recibe de:** Movimientos (abonos reducen el Saldo calculado), Metas (deuda relacionada con meta).
+
+---
+
+## 5. Métodos de Pago
+
+### Propósito
+Vista consolidada y normalizada de todos los medios de pago disponibles (cuentas + tarjetas como origen). Actúa como catálogo intermedio que unifica las tres fuentes (Cuentas, Tarjetas, Deudas) para alimentar los campos de selección en Presupuesto, Movimientos y Recordatorios.
+
+### Estructura
+
+| Columna | Campo | Tipo | Descripción |
+|---------|-------|------|-------------|
+| A | ID_MP | Manual / Clave primaria | Identificador único del método de pago |
+| B | Nombre | Manual | Nombre visible en los dropdowns |
+| C | Tipo método | Desplegable | Cuenta, Tarjeta de crédito, Efectivo, etc. |
+| D | Estado | Desplegable | Activo / Inactivo |
+| E | Fuente | Referencia | Indica si viene de Cuentas, Tarjetas u otro origen |
+| F | Puede ser destino | Booleano | Si aplica como cuenta destino en transferencias |
+| G | Es patrimonio | Booleano | Si este método cuenta como activo patrimonial |
+| H | Cuenta de pago predeterminada | Referencia | Cuenta asociada para liquidar pagos |
+
+#### Columnas de Fórmulas (J, L, N)
+| Columna | Campo | Estado |
+|---------|-------|--------|
+| J | Métodos activos | Fórmula — actualmente retorna #N/A (sin datos) |
+| L | Solo cuentas destino | Fórmula — actualmente retorna #N/A (sin datos) |
+| N | Solo tarjetas destino | Fórmula — actualmente retorna #N/A (sin datos) |
+
+> **Riesgo:** Las fórmulas #N/A en J, L y N indican que dependen de datos de Cuentas y Tarjetas que aún no han sido registrados. Si estas fórmulas alimentan validaciones dinámicas en otras hojas, los dropdowns dependientes estarán vacíos o rotos hasta que se ingresen datos.
+
+### Relaciones
+- **Recibe de:** Cuentas, Tarjetas, Deudas.
+- **Alimenta:** Presupuesto (campo "Método de Pago"), Movimientos (campo "Método de Pago"), Recordatorios (campo "Método de Pago"), Atajos (campo "Método de Pago").
+
+---
+
+## 6. Diagnóstico
+
+### Propósito
+Hoja de análisis financiero mensual. Compara la realidad del presupuesto con tres marcos de referencia: el ideal 50/30/20, el Plan Fintru personalizado, y calcula la brecha entre ellos. Genera un conjunto de métricas de control y un estado diagnóstico narrativo.
+
+### Estructura
+
+#### Parámetros de Control (A1:B3)
+| Celda | Campo | Tipo | Notas |
+|-------|-------|------|-------|
+| B1 | Versión analizada | Desplegable | Opciones: **Inicial**, **Planeado**, **Ajustado** |
+| B2 | Días del mes | Calculado | 30 (valor actual) |
+| B3 | Días restantes | Calculado | 1 (valor actual) |
+
+#### Tabla de Indicadores (A5:E14)
+| Fila | Indicador | Realidad | Ideal 50/30/20 | Plan Fintru | Brecha |
+|------|-----------|----------|----------------|-------------|--------|
+| 6 | Total ingresos | Vacío | — | — | — |
+| 7 | Total Egresos | Vacío | — | — | — |
+| 8 | Decidible actual | `=B6-B7` | — | — | — |
+| 9 | Consumo obligatorio | Calculado | $0 | $0 | $0 |
+| 10 | % consumo obligatorio | 0,00% | **50,00%** | 0,00% | — |
+| 11 | Consumo libre | Calculado | $0 | $0 | $0 |
+| 12 | % consumo libre | 0,
