@@ -1,0 +1,635 @@
+/****************************************************
+ * AutomaticosPresupuesto.gs
+ * Ejecuta movimientos automáticos mensuales desde
+ * Presupuesto hacia Movimientos.
+ * Versión robusta: escribe por nombre de encabezado,
+ * no por posición fija de columna.
+ ****************************************************/
+
+function ejecutarAutomaticosHoy() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Presupuesto o Movimientos.");
+  }
+
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  const diaHoy = hoy.getDate();
+  const anio = hoy.getFullYear();
+  const mes = hoy.getMonth() + 1;
+  const periodo = `${anio}-${String(mes).padStart(2, "0")}`;
+  const ultimoDiaMes = new Date(anio, mes, 0).getDate();
+
+  const presupuestoLastRow = shPresupuesto.getLastRow();
+  const presupuestoLastCol = shPresupuesto.getLastColumn();
+
+  if (presupuestoLastRow < 2) return;
+
+  const presupuestoHeaders = shPresupuesto
+    .getRange(1, 1, 1, presupuestoLastCol)
+    .getValues()[0];
+
+  const presupuestoMap = crearHeaderMap_(presupuestoHeaders);
+
+  const presupuestoData = shPresupuesto
+    .getRange(2, 1, presupuestoLastRow - 1, presupuestoLastCol)
+    .getValues();
+
+  const movimientosLastRow = shMovimientos.getLastRow();
+  const movimientosLastCol = shMovimientos.getLastColumn();
+
+  const movimientosHeaders = shMovimientos
+    .getRange(1, 1, 1, movimientosLastCol)
+    .getValues()[0];
+
+  const movimientosMap = crearHeaderMap_(movimientosHeaders);
+
+  const refColMovimientos = obtenerIndiceHeader_(movimientosMap, [
+    "Ref_Presupuesto",
+    "Ref Presupuesto"
+  ]);
+
+  const movimientosRefs = refColMovimientos !== null && movimientosLastRow >= 2
+    ? shMovimientos
+        .getRange(2, refColMovimientos + 1, movimientosLastRow - 1, 1)
+        .getValues()
+        .flat()
+        .map(String)
+    : [];
+
+  const tipoMetodoMap = obtenerTipoMetodoMap_();
+  const nuevasFilas = [];
+
+  presupuestoData.forEach((row, index) => {
+    const filaPresupuesto = index + 2;
+
+    const concepto = leerCampo_(row, presupuestoMap, ["Concepto"]);
+    const monto = leerCampo_(row, presupuestoMap, ["Monto"]);
+    const diaPagoRaw = leerCampo_(row, presupuestoMap, ["Día de Pago", "Dia de Pago"]);
+    const metodoPago = leerCampo_(row, presupuestoMap, ["Método de Pago", "Metodo de Pago"]);
+    const destino = leerCampo_(row, presupuestoMap, ["Destino"]);
+    const destinoTC = leerCampo_(row, presupuestoMap, ["Destino_TC", "Destino TC"]);
+    const destinoDeuda = leerCampo_(row, presupuestoMap, ["Destino_Deuda", "Destino Deuda"]);
+    const recurrencia = leerCampo_(row, presupuestoMap, ["Recurrencia"]);
+    const moneda = leerCampo_(row, presupuestoMap, ["Moneda"]);
+    const cop = leerCampo_(row, presupuestoMap, ["COP"]);
+    const tipo = leerCampo_(row, presupuestoMap, ["Tipo"]);
+    const categoria = leerCampo_(row, presupuestoMap, ["Categoria", "Categoría"]);
+    const naturaleza = leerCampo_(row, presupuestoMap, ["Naturaleza"]);
+    const etiqueta = leerCampo_(row, presupuestoMap, ["Etiqueta"]);
+    const meta = leerCampo_(row, presupuestoMap, ["Meta"]);
+    const activo = leerCampo_(row, presupuestoMap, ["Activo"]);
+    const versionPresupuesto = leerCampo_(row, presupuestoMap, [
+      "Versión presupuesto",
+      "Version presupuesto"
+    ]);
+
+    let diaPago = "";
+
+    if (diaPagoRaw instanceof Date) {
+      diaPago = diaPagoRaw.getDate();
+    } else {
+      diaPago = Number(diaPagoRaw);
+    }
+
+    if (!concepto) return;
+    if (String(activo).trim() !== "Activo") return;
+    if (String(tipo).trim() !== "Automático") return;
+    if (String(recurrencia).trim() !== "Mensual") return;
+    if (!diaPago) return;
+
+    const diaEjecucion = Math.min(diaPago, ultimoDiaMes);
+
+    if (diaEjecucion !== diaHoy) return;
+
+    const refPresupuesto = `PRESUPUESTO-F${filaPresupuesto}-${periodo}`;
+
+    if (movimientosRefs.includes(refPresupuesto)) return;
+
+    const idMovimiento = generarSiguienteIdMovimiento_(shMovimientos, nuevasFilas.length);
+    const tipoMetodo = tipoMetodoMap[String(metodoPago).trim()] || "";
+
+    const nuevaFila = new Array(movimientosLastCol).fill("");
+
+    escribirCampo_(nuevaFila, movimientosMap, ["ID_Movimiento", "ID Movimiento"], idMovimiento);
+    escribirCampo_(nuevaFila, movimientosMap, ["Fecha"], hoy);
+    escribirCampo_(nuevaFila, movimientosMap, ["Concepto"], concepto);
+    escribirCampo_(nuevaFila, movimientosMap, ["Monto"], monto);
+    escribirCampo_(nuevaFila, movimientosMap, ["Moneda"], moneda);
+    escribirCampo_(nuevaFila, movimientosMap, ["COP"], cop);
+    escribirCampo_(nuevaFila, movimientosMap, ["Método de pago", "Método de Pago", "Metodo de pago", "Metodo de Pago"], metodoPago);
+    escribirCampo_(nuevaFila, movimientosMap, ["Tipo método", "Tipo Método", "Tipo metodo", "Tipo Metodo"], tipoMetodo);
+    escribirCampo_(nuevaFila, movimientosMap, ["Destino"], destino);
+    escribirCampo_(nuevaFila, movimientosMap, ["Destino_TC", "Destino TC"], destinoTC);
+    escribirCampo_(nuevaFila, movimientosMap, ["Destino_Deuda", "Destino Deuda"], destinoDeuda);
+    escribirCampo_(nuevaFila, movimientosMap, ["Categoría", "Categoria"], categoria);
+    escribirCampo_(nuevaFila, movimientosMap, ["Naturaleza"], naturaleza);
+    escribirCampo_(nuevaFila, movimientosMap, ["Etiqueta"], etiqueta);
+    escribirCampo_(nuevaFila, movimientosMap, ["Meta"], meta);
+    escribirCampo_(nuevaFila, movimientosMap, ["Origen ejecución", "Origen ejecucion"], "Automático desde presupuesto");
+    escribirCampo_(nuevaFila, movimientosMap, ["Ref_Presupuesto", "Ref Presupuesto"], refPresupuesto);
+    escribirCampo_(nuevaFila, movimientosMap, ["Notas"], `Generado desde Presupuesto. Versión: ${versionPresupuesto || ""}`);
+
+    nuevasFilas.push(nuevaFila);
+  });
+
+  if (nuevasFilas.length === 0) return;
+
+  nuevasFilas.forEach(fila => {
+    const targetRow = obtenerPrimeraFilaVaciaPorConcepto_(shMovimientos, movimientosMap);
+
+    shMovimientos
+      .getRange(targetRow, 1, 1, movimientosLastCol)
+      .setValues([fila]);
+
+    if (typeof aplicarValidacionEtiquetaMovimiento_ === "function") {
+      aplicarValidacionEtiquetaMovimiento_(shMovimientos, targetRow);
+    }
+
+    if (typeof aplicarValidacionMetaMovimiento_ === "function") {
+      aplicarValidacionMetaMovimiento_(shMovimientos, targetRow);
+    }
+  });
+}
+
+
+function obtenerTipoMetodoMap_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shMetodos = ss.getSheetByName("Métodos de Pago");
+
+  if (!shMetodos) {
+    throw new Error("No existe la hoja Métodos de Pago.");
+  }
+
+  const lastRow = shMetodos.getLastRow();
+  if (lastRow < 2) return {};
+
+  const data = shMetodos.getRange(2, 2, lastRow - 1, 2).getValues();
+  const map = {};
+
+  data.forEach(row => {
+    const nombre = row[0];
+    const tipo = row[1];
+
+    if (nombre) {
+      map[String(nombre).trim()] = tipo;
+    }
+  });
+
+  return map;
+}
+
+
+function generarSiguienteIdMovimiento_(shMovimientos, offset) {
+  const lastRow = shMovimientos.getLastRow();
+  const lastCol = shMovimientos.getLastColumn();
+
+  const headers = shMovimientos.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = crearHeaderMap_(headers);
+
+  const idCol = obtenerIndiceHeader_(map, ["ID_Movimiento", "ID Movimiento"]);
+
+  if (idCol === null || lastRow < 2) {
+    return `MOV-${String(1 + offset).padStart(4, "0")}`;
+  }
+
+  const ids = shMovimientos
+    .getRange(2, idCol + 1, lastRow - 1, 1)
+    .getValues()
+    .flat();
+
+  const numeros = ids
+    .map(id => {
+      const match = String(id).match(/MOV-(\d+)/);
+      return match ? Number(match[1]) : 0;
+    })
+    .filter(num => !isNaN(num));
+
+  const maxId = numeros.length > 0 ? Math.max(...numeros) : 0;
+
+  return `MOV-${String(maxId + 1 + offset).padStart(4, "0")}`;
+}
+
+
+function crearTriggerAutomaticosDiario() {
+  eliminarTriggerAutomaticosDiario();
+
+  ScriptApp.newTrigger("ejecutarAutomaticosHoy")
+    .timeBased()
+    .everyDays(1)
+    .atHour(7)
+    .create();
+}
+
+
+function eliminarTriggerAutomaticosDiario() {
+  const triggers = ScriptApp.getProjectTriggers();
+
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === "ejecutarAutomaticosHoy") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+}
+
+
+function probarAutomaticosHoy() {
+  ejecutarAutomaticosHoy();
+}
+
+
+function diagnosticarAutomaticosHoy() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Presupuesto o Movimientos.");
+  }
+
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  const diaHoy = hoy.getDate();
+  const anio = hoy.getFullYear();
+  const mes = hoy.getMonth() + 1;
+  const periodo = `${anio}-${String(mes).padStart(2, "0")}`;
+
+  let shDebug = ss.getSheetByName("Debug Automaticos");
+  if (!shDebug) {
+    shDebug = ss.insertSheet("Debug Automaticos");
+  }
+
+  shDebug.clearContents();
+
+  shDebug.getRange(1, 1, 1, 13).setValues([[
+    "Fila Presupuesto",
+    "Concepto",
+    "Día pago",
+    "Día hoy",
+    "Tipo",
+    "Activo",
+    "Recurrencia",
+    "Naturaleza",
+    "Categoría",
+    "Etiqueta",
+    "Ref presupuesto",
+    "¿Pasa?",
+    "Motivo"
+  ]]);
+
+  const presupuestoLastRow = shPresupuesto.getLastRow();
+  const presupuestoLastCol = shPresupuesto.getLastColumn();
+
+  if (presupuestoLastRow < 2) return;
+
+  const headers = shPresupuesto.getRange(1, 1, 1, presupuestoLastCol).getValues()[0];
+  const map = crearHeaderMap_(headers);
+
+  const data = shPresupuesto
+    .getRange(2, 1, presupuestoLastRow - 1, presupuestoLastCol)
+    .getValues();
+
+  const debugRows = [];
+
+  data.forEach((row, index) => {
+    const filaPresupuesto = index + 2;
+
+    const concepto = leerCampo_(row, map, ["Concepto"]);
+    const diaPagoRaw = leerCampo_(row, map, ["Día de Pago", "Dia de Pago"]);
+    const tipo = String(leerCampo_(row, map, ["Tipo"])).trim();
+    const activo = String(leerCampo_(row, map, ["Activo"])).trim();
+    const recurrencia = String(leerCampo_(row, map, ["Recurrencia"])).trim();
+    const naturaleza = leerCampo_(row, map, ["Naturaleza"]);
+    const categoria = leerCampo_(row, map, ["Categoria", "Categoría"]);
+    const etiqueta = leerCampo_(row, map, ["Etiqueta"]);
+
+    let diaPago = "";
+
+    if (diaPagoRaw instanceof Date) {
+      diaPago = diaPagoRaw.getDate();
+    } else {
+      diaPago = Number(diaPagoRaw);
+    }
+
+    const refPresupuesto = `PRESUPUESTO-F${filaPresupuesto}-${periodo}`;
+
+    let pasa = true;
+    let motivo = "OK";
+
+    if (!concepto) {
+      pasa = false;
+      motivo = "Sin concepto";
+    } else if (activo !== "Activo") {
+      pasa = false;
+      motivo = "Activo no es Activo";
+    } else if (tipo !== "Automático") {
+      pasa = false;
+      motivo = "Tipo no es Automático";
+    } else if (recurrencia !== "Mensual") {
+      pasa = false;
+      motivo = "Recurrencia no es Mensual";
+    } else if (!diaPago) {
+      pasa = false;
+      motivo = "Día de pago vacío o inválido";
+    } else if (diaPago !== diaHoy) {
+      pasa = false;
+      motivo = "Día de pago no es hoy";
+    }
+
+    debugRows.push([
+      filaPresupuesto,
+      concepto,
+      diaPagoRaw,
+      diaHoy,
+      tipo,
+      activo,
+      recurrencia,
+      naturaleza,
+      categoria,
+      etiqueta,
+      refPresupuesto,
+      pasa ? "Sí" : "No",
+      motivo
+    ]);
+  });
+
+  if (debugRows.length > 0) {
+    shDebug.getRange(2, 1, debugRows.length, 13).setValues(debugRows);
+  }
+}
+
+
+function crearHeaderMap_(headers) {
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const key = normalizarHeader_(header);
+    if (key) {
+      map[key] = index;
+    }
+  });
+
+  return map;
+}
+
+
+function obtenerIndiceHeader_(map, posiblesNombres) {
+  for (const nombre of posiblesNombres) {
+    const key = normalizarHeader_(nombre);
+    if (Object.prototype.hasOwnProperty.call(map, key)) {
+      return map[key];
+    }
+  }
+
+  return null;
+}
+
+
+function leerCampo_(row, map, posiblesNombres) {
+  const index = obtenerIndiceHeader_(map, posiblesNombres);
+  return index === null ? "" : row[index];
+}
+
+
+function escribirCampo_(row, map, posiblesNombres, value) {
+  const index = obtenerIndiceHeader_(map, posiblesNombres);
+  if (index !== null) {
+    row[index] = value;
+  }
+}
+
+
+function normalizarHeader_(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ");
+}
+function obtenerPrimeraFilaVaciaPorConcepto_(shMovimientos, movimientosMap) {
+  const conceptoCol = obtenerIndiceHeader_(movimientosMap, ["Concepto"]);
+
+  if (conceptoCol === null) {
+    throw new Error("No se encontró la columna Concepto en Movimientos.");
+  }
+
+  const startRow = 2;
+  const maxRows = shMovimientos.getMaxRows();
+  const numRows = maxRows - 1;
+
+  const conceptos = shMovimientos
+    .getRange(startRow, conceptoCol + 1, numRows, 1)
+    .getValues()
+    .flat();
+
+  for (let i = 0; i < conceptos.length; i++) {
+    if (String(conceptos[i]).trim() === "") {
+      return startRow + i;
+    }
+  }
+
+  const nuevaFila = maxRows + 1;
+  shMovimientos.insertRowsAfter(maxRows, 1);
+  return nuevaFila;
+}
+function monitorearAutomaticos() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Presupuesto o Movimientos.");
+  }
+
+  let shMonitor = ss.getSheetByName("Monitor Automáticos");
+  if (!shMonitor) {
+    shMonitor = ss.insertSheet("Monitor Automáticos");
+  }
+
+  shMonitor.clearContents();
+
+  shMonitor.getRange(1, 1, 1, 11).setValues([[
+    "Fila Presupuesto",
+    "Concepto",
+    "Monto",
+    "Día de Pago",
+    "Tipo",
+    "Activo",
+    "Recurrencia",
+    "Próxima ejecución",
+    "Ref del mes",
+    "Estado",
+    "Motivo"
+  ]]);
+
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  const anioActual = hoy.getFullYear();
+  const mesActualIndex = hoy.getMonth(); // 0-11
+
+  const presupuestoLastRow = shPresupuesto.getLastRow();
+  const presupuestoLastCol = shPresupuesto.getLastColumn();
+
+  if (presupuestoLastRow < 2) return;
+
+  const presupuestoHeaders = shPresupuesto
+    .getRange(1, 1, 1, presupuestoLastCol)
+    .getValues()[0];
+
+  const presupuestoMap = crearHeaderMap_(presupuestoHeaders);
+
+  const presupuestoData = shPresupuesto
+    .getRange(2, 1, presupuestoLastRow - 1, presupuestoLastCol)
+    .getValues();
+
+  const movimientosLastRow = shMovimientos.getLastRow();
+  const movimientosLastCol = shMovimientos.getLastColumn();
+
+  const movimientosHeaders = shMovimientos
+    .getRange(1, 1, 1, movimientosLastCol)
+    .getValues()[0];
+
+  const movimientosMap = crearHeaderMap_(movimientosHeaders);
+
+  const refColMovimientos = obtenerIndiceHeader_(movimientosMap, [
+    "Ref_Presupuesto",
+    "Ref Presupuesto"
+  ]);
+
+  const movimientosRefs = refColMovimientos !== null && movimientosLastRow >= 2
+    ? shMovimientos
+        .getRange(2, refColMovimientos + 1, movimientosLastRow - 1, 1)
+        .getValues()
+        .flat()
+        .map(String)
+    : [];
+
+  const filasMonitor = [];
+
+  presupuestoData.forEach((row, index) => {
+    const filaPresupuesto = index + 2;
+
+    const concepto = leerCampo_(row, presupuestoMap, ["Concepto"]);
+    const monto = leerCampo_(row, presupuestoMap, ["Monto"]);
+    const diaPagoRaw = leerCampo_(row, presupuestoMap, ["Día de Pago", "Dia de Pago"]);
+    const tipo = String(leerCampo_(row, presupuestoMap, ["Tipo"])).trim();
+    const activo = String(leerCampo_(row, presupuestoMap, ["Activo"])).trim();
+    const recurrencia = String(leerCampo_(row, presupuestoMap, ["Recurrencia"])).trim();
+
+    if (!concepto) return;
+
+    let diaPago = "";
+
+    if (diaPagoRaw instanceof Date) {
+      diaPago = diaPagoRaw.getDate();
+    } else {
+      diaPago = Number(diaPagoRaw);
+    }
+
+    let fechaEsteMes = "";
+    let fechaProxima = "";
+    let periodoRef = "";
+    let refPresupuesto = "";
+    let yaEjecutadoEsteMes = false;
+
+    if (diaPago) {
+      fechaEsteMes = obtenerFechaEjecucionMensual_(anioActual, mesActualIndex, diaPago);
+
+      const periodoEsteMes = obtenerPeriodoDesdeFecha_(fechaEsteMes);
+      const refEsteMes = `PRESUPUESTO-F${filaPresupuesto}-${periodoEsteMes}`;
+      yaEjecutadoEsteMes = movimientosRefs.includes(refEsteMes);
+
+      if (fechaEsteMes < hoy || yaEjecutadoEsteMes) {
+        const fechaSiguienteMes = obtenerFechaEjecucionMensual_(
+          new Date(anioActual, mesActualIndex + 1, 1).getFullYear(),
+          new Date(anioActual, mesActualIndex + 1, 1).getMonth(),
+          diaPago
+        );
+
+        fechaProxima = fechaSiguienteMes;
+      } else {
+        fechaProxima = fechaEsteMes;
+      }
+
+      periodoRef = obtenerPeriodoDesdeFecha_(fechaProxima);
+      refPresupuesto = `PRESUPUESTO-F${filaPresupuesto}-${periodoRef}`;
+    }
+
+    let estado = "";
+    let motivo = "";
+
+    if (activo !== "Activo") {
+      estado = "No se ejecuta";
+      motivo = "No está activo";
+    } else if (tipo !== "Automático") {
+      estado = "No se ejecuta";
+      motivo = "No es automático";
+    } else if (recurrencia !== "Mensual") {
+      estado = "No se ejecuta";
+      motivo = "No es mensual";
+    } else if (!diaPago) {
+      estado = "No se ejecuta";
+      motivo = "Día de pago vacío o inválido";
+    } else if (yaEjecutadoEsteMes) {
+      estado = "Ya ejecutado este mes";
+      motivo = "La próxima ejecución será el siguiente mes";
+    } else if (fechaEsteMes.getTime() === hoy.getTime()) {
+      estado = "Se ejecuta hoy";
+      motivo = "Cumple condiciones";
+    } else if (fechaEsteMes > hoy) {
+      estado = "Pendiente este mes";
+      motivo = `Se ejecutará el día ${fechaEsteMes.getDate()} de este mes`;
+    } else {
+      estado = "Pendiente próximo mes";
+      motivo = `El día de pago de este mes ya pasó. Próxima ejecución: ${fechaProxima.getDate()}/${fechaProxima.getMonth() + 1}/${fechaProxima.getFullYear()}`;
+    }
+
+    filasMonitor.push([
+      filaPresupuesto,
+      concepto,
+      monto,
+      diaPago,
+      tipo,
+      activo,
+      recurrencia,
+      fechaProxima,
+      refPresupuesto,
+      estado,
+      motivo
+    ]);
+  });
+
+  if (filasMonitor.length > 0) {
+    shMonitor.getRange(2, 1, filasMonitor.length, 11).setValues(filasMonitor);
+  }
+}
+
+
+function obtenerFechaEjecucionMensual_(anio, mesIndex, diaPago) {
+  const ultimoDiaMes = new Date(anio, mesIndex + 1, 0).getDate();
+  const diaEjecucion = Math.min(Number(diaPago), ultimoDiaMes);
+
+  const fecha = new Date(anio, mesIndex, diaEjecucion);
+  fecha.setHours(0, 0, 0, 0);
+
+  return fecha;
+}
+
+
+function obtenerPeriodoDesdeFecha_(fecha) {
+  const anio = fecha.getFullYear();
+  const mes = fecha.getMonth() + 1;
+
+  return `${anio}-${String(mes).padStart(2, "0")}`;
+}
