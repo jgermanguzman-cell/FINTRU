@@ -1,0 +1,282 @@
+function actualizarPagosMinimosTarjetas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+
+  const tarjetas = ss.getSheetByName("Tarjetas");
+  const presupuesto = ss.getSheetByName("Presupuesto");
+
+  if (!tarjetas) {
+    ui.alert("No encontré la hoja Tarjetas.");
+    return;
+  }
+
+  if (!presupuesto) {
+    ui.alert("No encontré la hoja Presupuesto.");
+    return;
+  }
+
+  const tarjetasLastRow = tarjetas.getLastRow();
+  if (tarjetasLastRow < 2) {
+    ui.alert("No hay tarjetas registradas.");
+    return;
+  }
+
+  const pHeaders = presupuesto.getRange(1, 1, 1, presupuesto.getLastColumn()).getValues()[0];
+  const tHeaders = tarjetas.getRange(1, 1, 1, tarjetas.getLastColumn()).getValues()[0];
+
+  const pMap = crearMapaHeadersFlexible_(pHeaders);
+  const tMap = crearMapaHeadersFlexible_(tHeaders);
+
+  const columnasPresupuesto = [
+    "Concepto",
+    "Monto",
+    "Día de Pago",
+    "Método de Pago",
+    "Destino",
+    "Destino_TC",
+    "Recurrencia",
+    "Moneda",
+    "COP",
+    "Tipo",
+    "Categoria",
+    "Etiqueta",
+    "Naturaleza",
+    "Activo",
+    "Versión presupuesto",
+    "Origen del registro",
+    "Estado de ejecución"
+  ];
+
+  const columnasTarjetas = [
+    "Nombre",
+    "Día de pago",
+    "Pago mínimo",
+    "Estado",
+    "Cuenta de pago predeterminada"
+  ];
+
+  const faltantesPresupuesto = columnasPresupuesto.filter(nombre => !col_(pMap, nombre));
+  const faltantesTarjetas = columnasTarjetas.filter(nombre => !col_(tMap, nombre));
+
+  if (faltantesPresupuesto.length > 0) {
+    ui.alert("Faltan estas columnas en Presupuesto:\n\n" + faltantesPresupuesto.join("\n"));
+    return;
+  }
+
+  if (faltantesTarjetas.length > 0) {
+    ui.alert("Faltan estas columnas en Tarjetas:\n\n" + faltantesTarjetas.join("\n"));
+    return;
+  }
+
+  const tarjetasData = tarjetas
+    .getRange(2, 1, tarjetasLastRow - 1, tarjetas.getLastColumn())
+    .getValues();
+
+  let creados = 0;
+  let actualizados = 0;
+  let desactivados = 0;
+  let omitidos = 0;
+  let filasVaciasIgnoradas = 0;
+
+  tarjetasData.forEach(row => {
+    const nombreTarjeta = row[col_(tMap, "Nombre") - 1];
+    const diaPagoRaw = row[col_(tMap, "Día de pago") - 1];
+    const pagoMinimoRaw = row[col_(tMap, "Pago mínimo") - 1];
+    const estado = row[col_(tMap, "Estado") - 1];
+    const cuentaPago = row[col_(tMap, "Cuenta de pago predeterminada") - 1];
+
+    const filaTieneAlgo =
+      nombreTarjeta || diaPagoRaw || pagoMinimoRaw || estado || cuentaPago;
+
+    if (!filaTieneAlgo) {
+      filasVaciasIgnoradas++;
+      return;
+    }
+
+    const estadoLimpio = String(estado).trim();
+    const nombreLimpio = String(nombreTarjeta).trim();
+    const pagoMinimo = parseMontoFintru_(pagoMinimoRaw);
+    const diaPago = parseDiaPagoFintru_(diaPagoRaw);
+
+    if (estadoLimpio !== "Activo") {
+      omitidos++;
+      return;
+    }
+
+    if (!nombreLimpio) {
+      omitidos++;
+      return;
+    }
+
+    const filaExistente = buscarPagoMinimoTarjetaExistente_(
+      presupuesto,
+      pMap,
+      nombreLimpio
+    );
+
+    if (!pagoMinimo || pagoMinimo <= 0) {
+      if (filaExistente) {
+        presupuesto.getRange(filaExistente, col_(pMap, "Activo")).setValue("Inactivo");
+        presupuesto.getRange(filaExistente, col_(pMap, "Estado de ejecución")).setValue("Omitido");
+        desactivados++;
+      } else {
+        omitidos++;
+      }
+      return;
+    }
+
+    if (!diaPago || diaPago < 1 || diaPago > 31) {
+      omitidos++;
+      return;
+    }
+
+    const valores = {
+      "Concepto": "Pago mínimo " + nombreLimpio,
+      "Monto": pagoMinimo,
+      "Día de Pago": diaPago,
+      "Método de Pago": cuentaPago || "",
+      "Destino": "",
+      "Destino_TC": nombreLimpio,
+      "Recurrencia": "Mensual",
+      "Moneda": "COP",
+      "COP": pagoMinimo,
+      "Tipo": "Recordatorio",
+      "Categoria": "N/A",
+      "Etiqueta": "Pago mínimo de tarjeta",
+      "Naturaleza": "Transferencia",
+      "Activo": "Activo",
+      "Versión presupuesto": "Inicial",
+      "Origen del registro": "Generado por tarjeta",
+      "Estado de ejecución": "Pendiente"
+    };
+
+    if (filaExistente) {
+      columnasPresupuesto.forEach(nombre => {
+        presupuesto.getRange(filaExistente, col_(pMap, nombre)).setValue(valores[nombre]);
+      });
+
+      if (typeof refrescarEtiquetaRelacionalEnFila_ === "function") {
+        refrescarEtiquetaRelacionalEnFila_(presupuesto, filaExistente, {
+          naturalezaCol: col_(pMap, "Naturaleza"),
+          categoriaCol: col_(pMap, "Categoria"),
+          etiquetaCol: col_(pMap, "Etiqueta"),
+          etiquetasAdicionalesCol: null
+        });
+      }
+
+      actualizados++;
+    } else {
+      const nuevaFila = new Array(pHeaders.length).fill("");
+
+      columnasPresupuesto.forEach(nombre => {
+        nuevaFila[col_(pMap, nombre) - 1] = valores[nombre];
+      });
+
+          presupuesto.appendRow(nuevaFila);
+
+    const nuevaFilaIndex = presupuesto.getLastRow();
+
+    if (typeof refrescarEtiquetaRelacionalEnFila_ === "function") {
+      refrescarEtiquetaRelacionalEnFila_(presupuesto, nuevaFilaIndex, {
+        naturalezaCol: col_(pMap, "Naturaleza"),
+        categoriaCol: col_(pMap, "Categoria"),
+        etiquetaCol: col_(pMap, "Etiqueta"),
+        etiquetasAdicionalesCol: null
+      });
+    }
+
+    creados++;
+    }
+  });
+
+  ui.alert(
+    "Pagos mínimos de tarjetas actualizados.\n\n" +
+    "Creados: " + creados + "\n" +
+    "Actualizados: " + actualizados + "\n" +
+    "Desactivados: " + desactivados + "\n" +
+    "Omitidos: " + omitidos + "\n" +
+    "Filas vacías ignoradas: " + filasVaciasIgnoradas
+  );
+}
+
+function buscarPagoMinimoTarjetaExistente_(presupuesto, headerMap, nombreTarjeta) {
+  const lastRow = presupuesto.getLastRow();
+  if (lastRow < 2) return null;
+
+  const data = presupuesto
+    .getRange(2, 1, lastRow - 1, presupuesto.getLastColumn())
+    .getValues();
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+
+    const destinoTC = row[col_(headerMap, "Destino_TC") - 1];
+    const origen = row[col_(headerMap, "Origen del registro") - 1];
+    const etiqueta = row[col_(headerMap, "Etiqueta") - 1];
+
+    if (
+      String(destinoTC).trim() === String(nombreTarjeta).trim() &&
+      String(origen).trim() === "Generado por tarjeta" &&
+      String(etiqueta).trim() === "Pago mínimo de tarjeta"
+    ) {
+      return i + 2;
+    }
+  }
+
+  return null;
+}
+
+function crearMapaHeadersFlexible_(headers) {
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const key = normalizarHeaderFintru_(header);
+    if (key) {
+      map[key] = index + 1;
+    }
+  });
+
+  return map;
+}
+
+function col_(map, nombre) {
+  return map[normalizarHeaderFintru_(nombre)] || null;
+}
+
+function normalizarHeaderFintru_(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function parseMontoFintru_(value) {
+  if (typeof value === "number") return value;
+
+  let text = String(value || "").trim();
+
+  if (!text) return 0;
+
+  text = text.replace(/[^\d,.-]/g, "");
+
+  if (text.includes(",")) {
+    text = text.replace(/\./g, "").replace(",", ".");
+  } else if (text.includes(".")) {
+    text = text.replace(/\./g, "");
+  }
+
+  const number = Number(text);
+
+  return isNaN(number) ? 0 : number;
+}
+
+function parseDiaPagoFintru_(value) {
+  if (value instanceof Date) {
+    return value.getDate();
+  }
+
+  const number = parseMontoFintru_(value);
+
+  return number ? Math.round(number) : 0;
+}
