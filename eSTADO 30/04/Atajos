@@ -1,0 +1,710 @@
+/****************************************************
+ * Atajos.gs
+ * Versión actualizada para Metas.
+ * Lee y escribe por encabezados, no por posición fija.
+ ****************************************************/
+
+function configurarHojaAtajos() {
+  refrescarAtajosDesdePresupuesto();
+  crearTriggerAtajos();
+}
+
+function refrescarAtajosDesdePresupuesto() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+
+  if (!shPresupuesto) {
+    throw new Error("No existe la hoja Presupuesto.");
+  }
+
+  let shAtajos = ss.getSheetByName("Atajos");
+  if (!shAtajos) {
+    shAtajos = ss.insertSheet("Atajos");
+  }
+
+  shAtajos.clearContents();
+  shAtajos.getDataRange().clearDataValidations();
+
+  try {
+    shAtajos.showColumns(5);
+  } catch (err) {}
+
+  shAtajos.getRange(1, 1, 1, 5).setValues([[
+    "Concepto",
+    "Monto",
+    "Método de Pago",
+    "Registrar ahora",
+    "Fila Presupuesto"
+  ]]);
+
+  const lastRow = shPresupuesto.getLastRow();
+  const lastCol = shPresupuesto.getLastColumn();
+
+  if (lastRow < 2) {
+    shAtajos.hideColumns(5);
+    return;
+  }
+
+  const headers = shPresupuesto.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = crearHeaderMapAtajos_(headers);
+
+  const data = shPresupuesto.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  const filasAtajos = [];
+
+  data.forEach((row, index) => {
+    const filaPresupuesto = index + 2;
+
+    const concepto = leerCampoAtajos_(row, map, ["Concepto"]);
+    const monto = leerCampoAtajos_(row, map, ["Monto"]);
+    const metodoPago = leerCampoAtajos_(row, map, ["Método de Pago", "Metodo de Pago"]);
+    const tipo = String(leerCampoAtajos_(row, map, ["Tipo"])).trim();
+    const activo = String(leerCampoAtajos_(row, map, ["Activo"])).trim();
+
+    if (!concepto) return;
+    if (tipo !== "Atajo") return;
+    if (activo !== "Activo") return;
+
+    filasAtajos.push([
+      concepto,
+      monto,
+      metodoPago,
+      false,
+      filaPresupuesto
+    ]);
+  });
+
+  if (filasAtajos.length > 0) {
+    shAtajos.getRange(2, 1, filasAtajos.length, 5).setValues(filasAtajos);
+    shAtajos.getRange(2, 4, filasAtajos.length, 1).insertCheckboxes();
+
+    const shMetodos = ss.getSheetByName("Métodos de Pago");
+
+    if (shMetodos) {
+      const ruleMetodoPago = SpreadsheetApp.newDataValidation()
+        .requireValueInRange(shMetodos.getRange("J2:J"), true)
+        .setAllowInvalid(false)
+        .build();
+
+      shAtajos.getRange(2, 3, filasAtajos.length, 1).setDataValidation(ruleMetodoPago);
+    }
+  }
+
+  shAtajos.setFrozenRows(1);
+  shAtajos.autoResizeColumns(1, 4);
+
+  try {
+    shAtajos.hideColumns(5);
+  } catch (err) {}
+}
+
+function manejarEdicionAtajos(e) {
+  if (!e || !e.range) return;
+
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== "Atajos") return;
+
+  const row = e.range.getRow();
+  const col = e.range.getColumn();
+
+  if (row < 2) return;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shAtajos = ss.getSheetByName("Atajos");
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shAtajos || !shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Atajos, Presupuesto o Movimientos.");
+  }
+
+  const filaPresupuesto = Number(shAtajos.getRange(row, 5).getValue());
+  if (!filaPresupuesto) return;
+
+  if (col === 2 || col === 3) {
+    actualizarPresupuestoDesdeAtajo_(shAtajos, shPresupuesto, row, filaPresupuesto);
+    return;
+  }
+
+  if (col === 4 && shAtajos.getRange(row, 4).getValue() === true) {
+    actualizarPresupuestoDesdeAtajo_(shAtajos, shPresupuesto, row, filaPresupuesto);
+    SpreadsheetApp.flush();
+
+    registrarAtajoEnMovimientos_(shPresupuesto, shMovimientos, filaPresupuesto);
+
+    shAtajos.getRange(row, 4).setValue(false);
+    SpreadsheetApp.flush();
+  }
+}
+
+function actualizarPresupuestoDesdeAtajo_(shAtajos, shPresupuesto, filaAtajo, filaPresupuesto) {
+  const monto = shAtajos.getRange(filaAtajo, 2).getValue();
+  const metodoPago = shAtajos.getRange(filaAtajo, 3).getValue();
+
+  escribirValorPorHeaderAtajos_(shPresupuesto, filaPresupuesto, "Monto", monto);
+  escribirValorPorHeaderAtajos_(shPresupuesto, filaPresupuesto, "Método de Pago", metodoPago);
+
+  SpreadsheetApp.flush();
+}
+
+function registrarAtajoEnMovimientos_(shPresupuesto, shMovimientos, filaPresupuesto) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const presupuestoLastCol = shPresupuesto.getLastColumn();
+  const presupuestoHeaders = shPresupuesto.getRange(1, 1, 1, presupuestoLastCol).getValues()[0];
+  const presupuestoMap = crearHeaderMapAtajos_(presupuestoHeaders);
+
+  const row = shPresupuesto.getRange(filaPresupuesto, 1, 1, presupuestoLastCol).getValues()[0];
+
+  const concepto = leerCampoAtajos_(row, presupuestoMap, ["Concepto"]);
+  const monto = leerCampoAtajos_(row, presupuestoMap, ["Monto"]);
+  const metodoPago = leerCampoAtajos_(row, presupuestoMap, ["Método de Pago", "Metodo de Pago"]);
+  const destino = leerCampoAtajos_(row, presupuestoMap, ["Destino"]);
+  const destinoTC = leerCampoAtajos_(row, presupuestoMap, ["Destino_TC", "Destino TC"]);
+  const destinoDeuda = leerCampoAtajos_(row, presupuestoMap, ["Destino_Deuda", "Destino Deuda"]);
+  const moneda = leerCampoAtajos_(row, presupuestoMap, ["Moneda"]);
+  const cop = leerCampoAtajos_(row, presupuestoMap, ["COP"]);
+  const categoria = leerCampoAtajos_(row, presupuestoMap, ["Categoria", "Categoría"]);
+  const naturaleza = leerCampoAtajos_(row, presupuestoMap, ["Naturaleza"]);
+  const etiqueta = leerCampoAtajos_(row, presupuestoMap, ["Etiqueta"]);
+  const meta = leerCampoAtajos_(row, presupuestoMap, ["Meta"]);
+
+  if (!concepto) return;
+
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  const timestamp = Utilities.formatDate(
+    new Date(),
+    ss.getSpreadsheetTimeZone(),
+    "yyyyMMdd-HHmmss"
+  );
+
+  const idMovimiento = generarSiguienteIdMovimientoAtajos_(shMovimientos);
+  const tipoMetodo = obtenerTipoMetodoAtajos_(metodoPago);
+  const refPresupuesto = `ATAJO-F${filaPresupuesto}-${timestamp}`;
+
+  const movimientosLastCol = shMovimientos.getLastColumn();
+  const movimientosHeaders = shMovimientos.getRange(1, 1, 1, movimientosLastCol).getValues()[0];
+  const movimientosMap = crearHeaderMapAtajos_(movimientosHeaders);
+
+  const nuevaFila = new Array(movimientosLastCol).fill("");
+
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["ID_Movimiento", "ID Movimiento"], idMovimiento);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Fecha"], hoy);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Concepto"], concepto);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Monto"], monto);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Moneda"], moneda);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["COP"], cop);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Método de pago", "Método de Pago", "Metodo de pago", "Metodo de Pago"], metodoPago);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Tipo método", "Tipo Método", "Tipo metodo", "Tipo Metodo"], tipoMetodo);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Destino"], destino);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Destino_TC", "Destino TC"], destinoTC);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Destino_Deuda", "Destino Deuda"], destinoDeuda);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Categoría", "Categoria"], categoria);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Naturaleza"], naturaleza);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Etiqueta"], etiqueta);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Meta"], meta);
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Origen ejecución", "Origen ejecucion"], "Manual");
+  escribirCampoAtajos_(nuevaFila, movimientosMap, ["Ref_Presupuesto", "Ref Presupuesto"], refPresupuesto);
+
+  const targetRow = obtenerPrimeraFilaVaciaPorConceptoAtajos_(shMovimientos);
+
+  shMovimientos
+    .getRange(targetRow, 1, 1, movimientosLastCol)
+    .setValues([nuevaFila]);
+
+  aplicarValidacionEtiquetaMovimiento_(shMovimientos, targetRow);
+  aplicarValidacionMetaMovimiento_(shMovimientos, targetRow);
+}
+
+function obtenerTipoMetodoAtajos_(metodoPago) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shMetodos = ss.getSheetByName("Métodos de Pago");
+
+  if (!shMetodos || !metodoPago) return "";
+
+  const lastRow = shMetodos.getLastRow();
+  if (lastRow < 2) return "";
+
+  const data = shMetodos.getRange(2, 2, lastRow - 1, 2).getValues();
+
+  const encontrado = data.find(row =>
+    String(row[0]).trim() === String(metodoPago).trim()
+  );
+
+  return encontrado ? encontrado[1] : "";
+}
+
+function generarSiguienteIdMovimientoAtajos_(shMovimientos) {
+  const lastRow = shMovimientos.getLastRow();
+  const lastCol = shMovimientos.getLastColumn();
+
+  const headers = shMovimientos.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = crearHeaderMapAtajos_(headers);
+
+  const idCol = obtenerIndiceHeaderAtajos_(map, ["ID_Movimiento", "ID Movimiento"]);
+
+  if (idCol === null || lastRow < 2) {
+    return "MOV-0001";
+  }
+
+  const ids = shMovimientos
+    .getRange(2, idCol + 1, lastRow - 1, 1)
+    .getValues()
+    .flat();
+
+  const numeros = ids
+    .map(id => {
+      const match = String(id).match(/MOV-(\d+)/);
+      return match ? Number(match[1]) : 0;
+    })
+    .filter(num => !isNaN(num));
+
+  const maxId = numeros.length > 0 ? Math.max(...numeros) : 0;
+
+  return `MOV-${String(maxId + 1).padStart(4, "0")}`;
+}
+
+function obtenerPrimeraFilaVaciaPorConceptoAtajos_(shMovimientos) {
+  const lastCol = shMovimientos.getLastColumn();
+  const headers = shMovimientos.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = crearHeaderMapAtajos_(headers);
+
+  const conceptoCol = obtenerIndiceHeaderAtajos_(map, ["Concepto"]);
+
+  if (conceptoCol === null) {
+    throw new Error("No se encontró la columna Concepto en Movimientos.");
+  }
+
+  const startRow = 2;
+  const maxRows = shMovimientos.getMaxRows();
+  const numRows = maxRows - 1;
+
+  const conceptos = shMovimientos
+    .getRange(startRow, conceptoCol + 1, numRows, 1)
+    .getValues()
+    .flat();
+
+  for (let i = 0; i < conceptos.length; i++) {
+    if (String(conceptos[i]).trim() === "") {
+      return startRow + i;
+    }
+  }
+
+  shMovimientos.insertRowsAfter(maxRows, 1);
+  return maxRows + 1;
+}
+
+function crearTriggerAtajos() {
+  eliminarTriggerAtajos();
+
+  ScriptApp.newTrigger("manejarEdicionAtajos")
+    .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+    .onEdit()
+    .create();
+}
+
+function eliminarTriggerAtajos() {
+  const triggers = ScriptApp.getProjectTriggers();
+
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === "manejarEdicionAtajos") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+}
+
+function probarRefreshAtajos() {
+  refrescarAtajosDesdePresupuesto();
+}
+
+function probarPrimerAtajo() {
+  probarAtajoNumero_(1);
+}
+
+function diagnosticarAtajoNumero4() {
+  diagnosticarAtajoNumero_(4);
+}
+
+function probarAtajoNumero4() {
+  probarAtajoNumero_(4);
+}
+
+function diagnosticarAtajoNumero_(numeroAtajo) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shAtajos = ss.getSheetByName("Atajos");
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+
+  if (!shAtajos || !shPresupuesto) {
+    throw new Error("Faltan hojas requeridas: Atajos o Presupuesto.");
+  }
+
+  const filaAtajo = numeroAtajo + 1;
+  const filaPresupuesto = Number(shAtajos.getRange(filaAtajo, 5).getValue());
+
+  if (!filaPresupuesto) {
+    throw new Error(`El atajo número ${numeroAtajo} no tiene fila de Presupuesto asociada.`);
+  }
+
+  const lastCol = shPresupuesto.getLastColumn();
+  const headers = shPresupuesto.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = crearHeaderMapAtajos_(headers);
+  const row = shPresupuesto.getRange(filaPresupuesto, 1, 1, lastCol).getValues()[0];
+
+  const diagnostico = [[
+    "Atajo número",
+    "Fila Atajos",
+    "Fila Presupuesto",
+    "Concepto",
+    "Monto",
+    "Método de Pago",
+    "Destino",
+    "Destino_TC",
+    "Destino_Deuda",
+    "Moneda",
+    "COP",
+    "Tipo",
+    "Categoría",
+    "Naturaleza",
+    "Etiqueta",
+    "Meta",
+    "Activo"
+  ], [
+    numeroAtajo,
+    filaAtajo,
+    filaPresupuesto,
+    leerCampoAtajos_(row, map, ["Concepto"]),
+    leerCampoAtajos_(row, map, ["Monto"]),
+    leerCampoAtajos_(row, map, ["Método de Pago", "Metodo de Pago"]),
+    leerCampoAtajos_(row, map, ["Destino"]),
+    leerCampoAtajos_(row, map, ["Destino_TC", "Destino TC"]),
+    leerCampoAtajos_(row, map, ["Destino_Deuda", "Destino Deuda"]),
+    leerCampoAtajos_(row, map, ["Moneda"]),
+    leerCampoAtajos_(row, map, ["COP"]),
+    leerCampoAtajos_(row, map, ["Tipo"]),
+    leerCampoAtajos_(row, map, ["Categoria", "Categoría"]),
+    leerCampoAtajos_(row, map, ["Naturaleza"]),
+    leerCampoAtajos_(row, map, ["Etiqueta"]),
+    leerCampoAtajos_(row, map, ["Meta"]),
+    leerCampoAtajos_(row, map, ["Activo"])
+  ]];
+
+  let shDebug = ss.getSheetByName("Debug Atajos");
+  if (!shDebug) {
+    shDebug = ss.insertSheet("Debug Atajos");
+  }
+
+  shDebug.clearContents();
+  shDebug.getRange(1, 1, diagnostico.length, diagnostico[0].length).setValues(diagnostico);
+}
+
+function probarAtajoNumero_(numeroAtajo) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shAtajos = ss.getSheetByName("Atajos");
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+
+  if (!shAtajos || !shPresupuesto || !shMovimientos) {
+    throw new Error("Faltan hojas requeridas: Atajos, Presupuesto o Movimientos.");
+  }
+
+  const filaAtajo = numeroAtajo + 1;
+  const filaPresupuesto = Number(shAtajos.getRange(filaAtajo, 5).getValue());
+
+  if (!filaPresupuesto) {
+    throw new Error(`El atajo número ${numeroAtajo} no tiene fila de Presupuesto asociada.`);
+  }
+
+  actualizarPresupuestoDesdeAtajo_(shAtajos, shPresupuesto, filaAtajo, filaPresupuesto);
+  SpreadsheetApp.flush();
+
+  registrarAtajoEnMovimientos_(shPresupuesto, shMovimientos, filaPresupuesto);
+
+  shAtajos.getRange(filaAtajo, 4).setValue(false);
+  SpreadsheetApp.flush();
+}
+
+function repararValidacionesPresupuestoMovimientos() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const shPresupuesto = ss.getSheetByName("Presupuesto");
+  const shMovimientos = ss.getSheetByName("Movimientos");
+  const shMetodos = ss.getSheetByName("Métodos de Pago");
+
+  if (!shPresupuesto || !shMovimientos || !shMetodos) {
+    throw new Error("Faltan hojas requeridas: Presupuesto, Movimientos o Métodos de Pago.");
+  }
+
+  const maxRowsPresupuesto = shPresupuesto.getMaxRows() - 1;
+  const maxRowsMovimientos = shMovimientos.getMaxRows() - 1;
+
+  const ruleMetodosPago = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(shMetodos.getRange("J2:J"), true)
+    .setAllowInvalid(false)
+    .build();
+
+  const ruleSoloCuentas = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(shMetodos.getRange("L2:L"), true)
+    .setAllowInvalid(false)
+    .build();
+
+  const ruleSoloTarjetas = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(shMetodos.getRange("N2:N"), true)
+    .setAllowInvalid(false)
+    .build();
+
+  const ruleSoloDeudas = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(shMetodos.getRange("P2:P"), true)
+    .setAllowInvalid(false)
+    .build();
+
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shPresupuesto, "Moneda", "cat_monedas", maxRowsPresupuesto);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shPresupuesto, "Naturaleza", "cat_naturaleza", maxRowsPresupuesto);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shPresupuesto, "Categoria", "cat_categorias", maxRowsPresupuesto);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shPresupuesto, "Tipo", "cat_tipo_presupuesto", maxRowsPresupuesto);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shPresupuesto, "Activo", "cat_estado", maxRowsPresupuesto);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shPresupuesto, "Versión presupuesto", "cat_version_presupuesto", maxRowsPresupuesto);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shPresupuesto, "Origen del registro", "cat_origen_registro", maxRowsPresupuesto);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shPresupuesto, "Estado de ejecución", "cat_estado_ejecucion", maxRowsPresupuesto);
+
+  aplicarValidacionPorHeaderAtajos_(shPresupuesto, "Método de Pago", ruleMetodosPago, maxRowsPresupuesto);
+  aplicarValidacionPorHeaderAtajos_(shPresupuesto, "Destino", ruleSoloCuentas, maxRowsPresupuesto);
+  aplicarValidacionPorHeaderAtajos_(shPresupuesto, "Destino_TC", ruleSoloTarjetas, maxRowsPresupuesto);
+  aplicarValidacionPorHeaderAtajos_(shPresupuesto, "Destino_Deuda", ruleSoloDeudas, maxRowsPresupuesto);
+
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shMovimientos, "Moneda", "cat_monedas", maxRowsMovimientos);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shMovimientos, "Naturaleza", "cat_naturaleza", maxRowsMovimientos);
+  aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, shMovimientos, "Categoría", "cat_categorias", maxRowsMovimientos);
+  aplicarValidacionPorHeaderAtajos_(shMovimientos, "Método de pago", ruleMetodosPago, maxRowsMovimientos);
+  aplicarValidacionPorHeaderAtajos_(shMovimientos, "Destino", ruleSoloCuentas, maxRowsMovimientos);
+  aplicarValidacionPorHeaderAtajos_(shMovimientos, "Destino_TC", ruleSoloTarjetas, maxRowsMovimientos);
+  aplicarValidacionPorHeaderAtajos_(shMovimientos, "Destino_Deuda", ruleSoloDeudas, maxRowsMovimientos);
+
+  const metasActivas = obtenerMetasActivasParaValidacionAtajos_();
+  aplicarValidacionListaPorHeaderAtajos_(shPresupuesto, "Meta", metasActivas, maxRowsPresupuesto);
+  aplicarValidacionListaPorHeaderAtajos_(shMovimientos, "Meta", metasActivas, maxRowsMovimientos);
+}
+
+function aplicarValidacionEtiquetaMovimiento_(shMovimientos, targetRow) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shCatalogos = ss.getSheetByName("Catálogos");
+
+  if (!shCatalogos) {
+    throw new Error("No existe la hoja Catálogos.");
+  }
+
+  const categoria = String(leerValorPorHeaderAtajos_(shMovimientos, targetRow, "Categoría") || leerValorPorHeaderAtajos_(shMovimientos, targetRow, "Categoria")).trim();
+  const naturaleza = String(leerValorPorHeaderAtajos_(shMovimientos, targetRow, "Naturaleza")).trim();
+
+  const etiquetaCol = buscarColumnaPorHeaderAtajos_(shMovimientos, "Etiqueta");
+  if (!etiquetaCol) return;
+
+  const etiquetaCell = shMovimientos.getRange(targetRow, etiquetaCol);
+  etiquetaCell.clearDataValidations();
+
+  if (!categoria || !naturaleza) return;
+
+  const lastRow = shCatalogos.getLastRow();
+  if (lastRow < 14) return;
+
+  const data = shCatalogos.getRange(14, 1, lastRow - 13, 3).getValues();
+
+  let etiquetas = [];
+
+  if (naturaleza === "Ingreso") {
+    etiquetas = data
+      .filter(row =>
+        String(row[0]).trim() === "N/A" &&
+        String(row[2]).trim() === "Activo" &&
+        ["Activo", "Pasivo", "Préstamo recibido"].includes(String(row[1]).trim())
+      )
+      .map(row => row[1]);
+  } else {
+    etiquetas = data
+      .filter(row =>
+        String(row[0]).trim() === categoria &&
+        String(row[2]).trim() === "Activo"
+      )
+      .map(row => row[1]);
+  }
+
+  etiquetas = [...new Set(etiquetas)].filter(Boolean);
+
+  if (etiquetas.length === 0) return;
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(etiquetas, true)
+    .setAllowInvalid(false)
+    .build();
+
+  etiquetaCell.setDataValidation(rule);
+}
+
+function aplicarValidacionMetaMovimiento_(shMovimientos, targetRow) {
+  const metaCol = buscarColumnaPorHeaderAtajos_(shMovimientos, "Meta");
+  if (!metaCol) return;
+
+  const metasActivas = obtenerMetasActivasParaValidacionAtajos_();
+  const cell = shMovimientos.getRange(targetRow, metaCol);
+
+  if (!metasActivas || metasActivas.length === 0) {
+    cell.clearDataValidations();
+    return;
+  }
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([...new Set(metasActivas.filter(String))], true)
+    .setAllowInvalid(false)
+    .build();
+
+  cell.setDataValidation(rule);
+}
+
+function obtenerMetasActivasParaValidacionAtajos_() {
+  if (typeof obtenerMetasActivasMetas_ === "function") {
+    return obtenerMetasActivasMetas_(SpreadsheetApp.getActiveSpreadsheet());
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const shMetas = ss.getSheetByName("Metas");
+
+  if (!shMetas) return [];
+
+  const lastRow = shMetas.getLastRow();
+  if (lastRow < 2) return [];
+
+  const lastCol = shMetas.getLastColumn();
+  const headers = shMetas.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = crearHeaderMapAtajos_(headers);
+
+  const data = shMetas.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  return data
+    .filter(row => {
+      const nombre = leerCampoAtajos_(row, map, ["Nombre"]);
+      const estado = String(leerCampoAtajos_(row, map, ["Estado"])).trim().toLowerCase();
+
+      if (!nombre) return false;
+
+      return estado === "activa" ||
+        estado === "activo" ||
+        estado === "vigente";
+    })
+    .map(row => String(leerCampoAtajos_(row, map, ["Nombre"])).trim());
+}
+
+function aplicarValidacionRangoNombradoPorHeaderAtajos_(ss, sheet, headerName, rangeName, maxRows) {
+  const namedRange = ss.getRangeByName(rangeName);
+  if (!namedRange) return;
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(namedRange, true)
+    .setAllowInvalid(false)
+    .build();
+
+  aplicarValidacionPorHeaderAtajos_(sheet, headerName, rule, maxRows);
+}
+
+function aplicarValidacionPorHeaderAtajos_(sheet, headerName, rule, maxRows) {
+  const col = buscarColumnaPorHeaderAtajos_(sheet, headerName);
+  if (!col) return;
+
+  sheet.getRange(2, col, maxRows, 1).setDataValidation(rule);
+}
+
+function aplicarValidacionListaPorHeaderAtajos_(sheet, headerName, values, maxRows) {
+  const col = buscarColumnaPorHeaderAtajos_(sheet, headerName);
+  if (!col) return;
+
+  const range = sheet.getRange(2, col, maxRows, 1);
+
+  if (!values || values.length === 0) {
+    range.clearDataValidations();
+    return;
+  }
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([...new Set(values.filter(String))], true)
+    .setAllowInvalid(false)
+    .build();
+
+  range.setDataValidation(rule);
+}
+
+function escribirValorPorHeaderAtajos_(sheet, rowNumber, headerName, value) {
+  const col = buscarColumnaPorHeaderAtajos_(sheet, headerName);
+
+  if (!col) {
+    throw new Error(`No se encontró la columna "${headerName}" en la hoja ${sheet.getName()}.`);
+  }
+
+  sheet.getRange(rowNumber, col).setValue(value);
+}
+
+function leerValorPorHeaderAtajos_(sheet, rowNumber, headerName) {
+  const col = buscarColumnaPorHeaderAtajos_(sheet, headerName);
+  if (!col) return "";
+
+  return sheet.getRange(rowNumber, col).getValue();
+}
+
+function buscarColumnaPorHeaderAtajos_(sheet, headerName) {
+  const lastCol = sheet.getLastColumn();
+  if (lastCol < 1) return null;
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = crearHeaderMapAtajos_(headers);
+
+  const index = obtenerIndiceHeaderAtajos_(map, [headerName]);
+
+  return index === null ? null : index + 1;
+}
+
+function crearHeaderMapAtajos_(headers) {
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const key = normalizarHeaderAtajos_(header);
+    if (key) {
+      map[key] = index;
+    }
+  });
+
+  return map;
+}
+
+function obtenerIndiceHeaderAtajos_(map, posiblesNombres) {
+  for (const nombre of posiblesNombres) {
+    const key = normalizarHeaderAtajos_(nombre);
+
+    if (Object.prototype.hasOwnProperty.call(map, key)) {
+      return map[key];
+    }
+  }
+
+  return null;
+}
+
+function leerCampoAtajos_(row, map, posiblesNombres) {
+  const index = obtenerIndiceHeaderAtajos_(map, posiblesNombres);
+  return index === null ? "" : row[index];
+}
+
+function escribirCampoAtajos_(row, map, posiblesNombres, value) {
+  const index = obtenerIndiceHeaderAtajos_(map, posiblesNombres);
+  if (index !== null) {
+    row[index] = value;
+  }
+}
+
+function normalizarHeaderAtajos_(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ");
+}
